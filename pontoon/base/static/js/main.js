@@ -79,7 +79,59 @@ var Pontoon = (function (my) {
      * string String that has to be displayed as is instead of rendered
      */
     doNotRender: function (string) {
-      return $('<div/>').text(string).html()
+      return $('<div/>').text(string).html();
+    },
+
+    /*
+     * Markup placeables
+     */
+    markPlaceables: function (string) {
+      function markup(string, regex, title) {
+        return string.replace(regex, '<mark class="placeable" title="' + title + '">$&</mark>');
+      }
+
+      string = this.doNotRender(string);
+
+      // Pontoon.doNotRender() replaces \u00A0 with &nbsp;
+      string = markup(string, /&nbsp;/gi, 'Non-breaking space');
+      string = markup(string, /[\u202F]/gi, 'Narrow non-breaking space');
+      string = markup(string, /[\u2009]/gi, 'Thin space');
+
+      return string;
+    },
+
+    /*
+     * Mark diff between the string and the reference string
+     */
+    diff: function (reference, string) {
+      var self = this,
+          diff_obj = new diff_match_patch(),
+          diff = diff_obj.diff_main(reference, string),
+          output = '';
+      diff_obj.diff_cleanupSemantic(diff);
+      diff_obj.diff_cleanupEfficiency(diff);
+
+      $.each(diff, function() {
+        var type = this[0],
+            slice = this[1];
+
+        // Inserted
+        if (type === 1) {
+          output += '<ins>' + self.markPlaceables(slice) + '</ins>';
+        }
+
+        // Deleted
+        if (type === -1) {
+          output += '<del>' + self.markPlaceables(slice) + '</del>';
+        }
+
+        // Equal
+        if (type === 0) {
+          output += self.markPlaceables(slice);
+        }
+      });
+
+      return output;
     },
 
     /*
@@ -94,7 +146,7 @@ var Pontoon = (function (my) {
       // www. sans http:// or https://
       var pseudoUrlPattern = /(^|[^\/])(www\.[\S]+(\b|$))/gim;
 
-      return string
+      return this.doNotRender(string)
         .replace(urlPattern, '<a href="$&" target="_blank">$&</a>')
         .replace(pseudoUrlPattern, '$1<a href="http://$2" target="_blank">$2</a>');
     },
@@ -130,13 +182,14 @@ var Pontoon = (function (my) {
 
       function append(data) {
         var title = loader !== 'search' ? ' title="Copy Into Translation (Tab)"' : ' title="Copy to clipboard"',
-            sources = sourcesMap[data.original + data.translation];
+            sources = sourcesMap[data.original + data.translation],
+            occurrencesTitle = 'Number of translation occurrences';
 
         if (sources) {
           sources.append(
             '<li><a class="translation-source" href="' + data.url + '" target="_blank" title="' + data.title + '">' +
               '<span>' + data.source + '</span>' +
-              (data.count ? '<sup>' + data.count  + '</sup>' : '') +
+              (data.count ? '<sup title="' + occurrencesTitle + '">' + data.count  + '</sup>' : '') +
             '</a></li>'
           );
 
@@ -148,13 +201,16 @@ var Pontoon = (function (my) {
                 '<li data-source="' + data.source + '">' +
                   '<a class="translation-source" href="' + data.url + '" target="_blank" title="' + data.title + '">' +
                     '<span>' + data.source + '</span>' +
-                    (data.count ? '<sup>' + data.count + '</sup>' : '') +
+                    (data.count ? '<sup title="' + occurrencesTitle + '">' + data.count + '</sup>' : '') +
                   '</a>' +
                 '</li>' +
               '</ul>' +
             '</header>' +
             '<p class="original">' + self.doNotRender(data.original || '') + '</p>' +
             '<p class="translation" dir="auto" lang="' + self.locale.code + '">' +
+              self.markPlaceables(data.translation) +
+            '</p>' +
+            '<p class="translation-clipboard">' +
               self.doNotRender(data.translation) +
             '</p>' +
           '</li>');
@@ -402,7 +458,7 @@ var Pontoon = (function (my) {
               original: this.source,
               quality: Math.round(this.quality) + '%',
               url: 'https://transvision.mozfr.org/?repo=global' +
-                   '&recherche=' + original +
+                   '&recherche=' + encodeURIComponent(original) +
                    '&locale=' + self.locale.code,
               title: 'Visit Transvision',
               source: 'Mozilla',
@@ -421,22 +477,44 @@ var Pontoon = (function (my) {
 /* Main code */
 $(function() {
 
+  function getRedirectUrl() {
+    return window.location.pathname + window.location.search;
+  }
+
+  // Sign in button action
+  $('#fxa-sign-in, #standalone-signin a, #sidebar-signin').on('click', function(ev) {
+    var $this = $(this);
+    var loginUrl = $this.prop('href'),
+        startSign = loginUrl.match(/\?/) ? '&': '?';
+    $this.prop('href', loginUrl + startSign + 'next=' + getRedirectUrl());
+  });
+
+  // Sign out button action
+  $('.sign-out a, #sign-out a').on('click', function(ev) {
+    var $this = $(this),
+        $form = $this.find('form');
+
+    ev.preventDefault();
+    $form.prop('action', $this.prop('href') + '?next=' + getRedirectUrl());
+    $form.submit();
+  });
+
   // Show/hide menu on click
   $('.selector').click(function (e) {
     if (!$(this).siblings('.menu').is(':visible')) {
       e.stopPropagation();
-      $('body:not(".admin-project") .menu').hide();
+      $('body:not(".admin-project, .locale-permissions") .menu').hide();
       $('.select').removeClass('opened');
       $('#iframe-cover:not(".hidden")').hide(); // iframe fix
       $(this).siblings('.menu').show().end()
              .parents('.select').addClass('opened');
       $('#iframe-cover:not(".hidden")').show(); // iframe fix
-      $('body:not(".admin-project") .menu:visible input[type=search]').focus().trigger('input');
+      $('body:not(".admin-project, .locale-permissions") .menu:visible input[type=search]').focus().trigger('input');
     }
   });
 
   // Menu hover
-  $('.menu').on('mouseenter', 'li, .static-links div', function () {
+  $('body').on('mouseenter', '.menu li, .menu .static-links div', function () {
     // Ignore on nested menus and static links on dashborads
     if ($(this).has('li').length ||
         $(this).is('.static-links div') && !$('body').is('.translate')) {
@@ -505,9 +583,9 @@ $(function() {
   });
 
   // Menu search
-  $('.menu input[type=search]').click(function (e) {
+  $('body').on('click', '.menu input[type=search]', function (e) {
     e.stopPropagation();
-  }).on('input.search', function(e) {
+  }).on('input.search', '.menu input[type=search]', function(e) {
     if (e.which === 9) {
       return;
     }
@@ -605,7 +683,7 @@ $(function() {
     Pontoon.startLoader();
 
     $.ajax({
-      url: '/api/v1/user/' + $('#server').data('email') + '/',
+      url: '/api/v1/user/' + $('#server').data('username') + '/',
       type: 'POST',
       data: {
         csrfmiddlewaretoken: $('#server').data('csrf'),
@@ -642,7 +720,7 @@ $(function() {
     function moveMenu(type) {
       var options = (type === "up") ? ["first", "last", -1] :
         ["last", "first", 1],
-          items = menu.find('li:visible:not(.horizontal-separator, :has(li))');
+          items = menu.find('li:visible:not(.horizontal-separator, .time-range-toolbar, :has(li))');
 
       if (hovered.length === 0 ||
           menu.find('li:not(:has(li)):visible:' + options[0]).is('.hover')) {
@@ -711,13 +789,13 @@ $(function() {
       }
 
       // Ctrl + Shift + A: Select All Strings
-      if (Pontoon.user.isTranslator && e.ctrlKey && e.shiftKey && key === 65) {
+      if (Pontoon.user.canTranslate() && e.ctrlKey && e.shiftKey && key === 65) {
         Pontoon.selectAllEntities();
         return false;
       }
 
       // Escape: Deselect entities and switch to first entity
-      if (Pontoon.user.isTranslator && $('#entitylist .entity.selected').length && key === 27) {
+      if (Pontoon.user.canTranslate() && $('#entitylist .entity.selected').length && key === 27) {
         if (Pontoon.app.advanced) {
           Pontoon.openFirstEntity();
         } else {
@@ -727,46 +805,4 @@ $(function() {
       }
     }
   });
-
-  var signinSelectors = '#profile .menu li.sign-in, p#sign-in-required > a#sidebar-signin, ul.links > li#sign-in';
-
-  if ($(signinSelectors).length) {
-    // Asynchronously load Persona to avoid blocking JS execution
-    $.getScript('https://login.persona.org/include.js');
-
-    // Sign in handler
-    $('body').on('click', signinSelectors, function (e) {
-      e.preventDefault();
-      var info = $('#browserid-info').data('info');
-
-      Pontoon.startLoader();
-
-      navigator.id.watch({
-        onlogin: function(verifyResult) {
-          $.get(info.csrfUrl).then(function(csrfToken) {
-            $.ajax({
-              url: info.loginUrl,
-              type: 'POST',
-              data: {
-                csrfmiddlewaretoken: csrfToken,
-                assertion: verifyResult
-              },
-              success: function(data) {
-                window.location.reload();
-              },
-              error: function(data) {
-                Pontoon.endLoader('Oops, something went wrong.', 'error');
-              }
-            });
-          });
-        }
-      });
-
-      try {
-        navigator.id.request(info.requestArgs);
-      }
-      catch(ex) { }
-    });
-  }
-
 });

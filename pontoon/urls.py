@@ -2,8 +2,9 @@ from django.conf.urls import include, url
 from django.contrib import admin
 from django.contrib.auth.views import logout
 from django.views.generic import RedirectView, TemplateView
-from django.contrib.staticfiles.views import serve as staticfile
 from pontoon.intro.views import intro
+
+pontoon_js_view = TemplateView.as_view(template_name='js/pontoon.js', content_type='text/javascript')
 
 urlpatterns = [
     # Legacy: Locale redirect for compatibility with i18n ready URL scheme
@@ -13,11 +14,11 @@ urlpatterns = [
     url(r'^ga/(?P<url>.*)$', RedirectView.as_view(url="/ga-IE/%(url)s", permanent=True)),
     url(r'^pt/(?P<url>.*)$', RedirectView.as_view(url="/pt-PT/%(url)s", permanent=True)),
 
+    # Accounts
+    url(r'^accounts/', include('pontoon.allauth_urls')),
+
     # Admin
     url(r'^admin/', include('pontoon.administration.urls')),
-
-    # Sites
-    url(r'^sites/', include('pontoon.sites.urls')),
 
     # Django admin
     url(r'^a/', include(admin.site.urls)),
@@ -27,9 +28,6 @@ urlpatterns = [
 
     # Test project: Pontoon Intro
     url(r'^intro/$', intro),
-    # BrowserID
-
-    url(r'', include('django_browserid.urls')),
 
     # Logout
     url(r'^signout/$', logout, {'next_page': '/'},
@@ -43,7 +41,7 @@ urlpatterns = [
     # Robots.txt
     url(r'^robots.txt$', TemplateView.as_view(template_name='robots.txt', content_type='text/plain')),
 
-    # Robots.txt
+    # contribute.json
     url(r'^contribute.json$', TemplateView.as_view(template_name='contribute.json', content_type='text/plain')),
 
     # Favicon
@@ -51,7 +49,8 @@ urlpatterns = [
         RedirectView.as_view(url='/static/img/favicon.ico', permanent=True)),
 
     # Include script
-    url(r'^pontoon\.js$', staticfile, kwargs=dict(path='js/pontoon.js', insecure=True)),
+    url(r'^pontoon\.js$', pontoon_js_view),
+    url(r'^static/js/pontoon\.js$', pontoon_js_view),
 
     # Main app: Must be at the end
     url(r'', include('pontoon.base.urls')),

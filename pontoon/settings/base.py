@@ -8,6 +8,7 @@ import dj_database_url
 
 
 _dirname = os.path.dirname
+
 ROOT = _dirname(_dirname(_dirname(os.path.abspath(__file__))))
 
 
@@ -26,6 +27,10 @@ DEV = os.environ.get('DJANGO_DEV', 'False') != 'False'
 
 DEBUG = os.environ.get('DJANGO_DEBUG', 'False') != 'False'
 
+HEROKU_DEMO = os.environ.get('HEROKU_DEMO', 'False') != 'False'
+
+DJANGO_LOGIN = os.environ.get('DJANGO_LOGIN', 'False') != 'False' or HEROKU_DEMO
+
 ADMINS = MANAGERS = (
     (os.environ.get('ADMIN_NAME', ''),
      os.environ.get('ADMIN_EMAIL', '')),
@@ -37,6 +42,7 @@ PROJECT_MANAGERS = os.environ.get('PROJECT_MANAGERS', '').split(',')
 DATABASES = {
     'default': dj_database_url.config(default='mysql://root@localhost/pontoon')
 }
+
 
 # Absolute path to the directory static files should be collected to.
 # Don't put anything in this directory yourself; store your static files
@@ -50,8 +56,27 @@ STATIC_HOST = os.environ.get('STATIC_HOST', '')
 SESSION_COOKIE_HTTPONLY = os.environ.get('SESSION_COOKIE_HTTPONLY', 'True') != 'False'
 SESSION_COOKIE_SECURE = os.environ.get('SESSION_COOKIE_SECURE', 'True') != 'False'
 
-SITE_URL = os.environ.get('SITE_URL', 'http://localhost:8000')
-BROWSERID_AUDIENCES = [SITE_URL]
+APP_URL_KEY = 'APP_URL'
+
+# For the sake of integration with Heroku, we dynamically load domain name
+# From the file that's set right after the build phase.
+if os.environ.get('HEROKU_DEMO') and not os.environ.get('SITE_URL'):
+    def _site_url():
+        from django.contrib.sites.models import Site
+        from django.core.cache import cache
+
+        app_url = cache.get(APP_URL_KEY)
+
+        # Sometimes data from cache is flushed, We can't do anything about that.
+        if not app_url:
+            app_url = "https://{}".format(Site.objects.get(pk=1).domain)
+            cache.set(APP_URL_KEY, app_url)
+
+        return app_url
+
+    SITE_URL = lazy(_site_url, str)()
+else:
+    SITE_URL = os.environ.get('SITE_URL', 'http://localhost:8000')
 
 # Custom LD_LIBRARY_PATH environment variable for SVN
 SVN_LD_LIBRARY_PATH = os.environ.get('SVN_LD_LIBRARY_PATH', '')
@@ -95,7 +120,6 @@ INSTALLED_APPS = (
     'pontoon.base',
     'pontoon.administration',
     'pontoon.intro',
-    'pontoon.sites',
     'pontoon.sync',
 
     # Django contrib apps
@@ -105,15 +129,21 @@ INSTALLED_APPS = (
     'django.contrib.sessions',
     'django.contrib.staticfiles',
 
+    # Django sites app is required by django-allauth
+    'django.contrib.sites',
+
     # Third-party apps, patches, fixes
     'commonware.response.cookies',
-    'django_browserid',
     'django_jinja',
     'django_nose',
     'pipeline',
     'session_csrf',
     'guardian',
     'corsheaders',
+    'allauth',
+    'allauth.account',
+    'allauth.socialaccount',
+    'allauth.socialaccount.providers.fxa',
 )
 
 BLOCKED_IPS = os.environ.get('BLOCKED_IPS', '').split(',')
@@ -123,6 +153,7 @@ MIDDLEWARE_CLASSES = (
     'sslify.middleware.SSLifyMiddleware',
     'pontoon.base.middleware.RaygunExceptionMiddleware',
     'pontoon.base.middleware.BlockedIpMiddleware',
+    'pontoon.base.middleware.HerokuDemoSetupMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
@@ -130,6 +161,8 @@ MIDDLEWARE_CLASSES = (
     'session_csrf.CsrfMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'django.middleware.security.SecurityMiddleware',
+    'csp.middleware.CSPMiddleware',
 )
 
 CONTEXT_PROCESSORS = (
@@ -148,7 +181,7 @@ TEMPLATES = [
         'APP_DIRS': True,
         'OPTIONS': {
             'match_extension': '',
-            'match_regex': r'^(?!(admin|registration)/).*\.(html|jinja)$',
+            'match_regex': r'^(?!(admin|registration|account|socialaccount)/).*\.(html|jinja|js)$',
             'context_processors': CONTEXT_PROCESSORS,
             'extensions': [
                 'jinja2.ext.do',
@@ -164,25 +197,25 @@ TEMPLATES = [
                 'django_jinja.builtins.extensions.DjangoFiltersExtension',
                 'pipeline.templatetags.ext.PipelineExtension',
             ],
-            'globals': {
-                'browserid_info': 'django_browserid.helpers.browserid_info',
-            }
         }
     },
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
-        'APP_DIRS': True,
+        'DIRS': [path('pontoon/base/templates/django')],
         'OPTIONS': {
             'debug': DEBUG,
-            'context_processors': CONTEXT_PROCESSORS
+            'context_processors': CONTEXT_PROCESSORS,
+            'loaders': [
+                'django.template.loaders.filesystem.Loader',
+                'django.template.loaders.app_directories.Loader',
+            ]
         }
     },
 ]
 
 AUTHENTICATION_BACKENDS = [
-    'django_browserid.auth.BrowserIDBackend',
     'django.contrib.auth.backends.ModelBackend',
+    'allauth.account.auth_backends.AuthenticationBackend',
     'guardian.backends.ObjectPermissionBackend',
 ]
 
@@ -220,11 +253,11 @@ PIPELINE_CSS = {
         ),
         'output_filename': 'css/admin_project.min.css',
     },
-    'locale_manage': {
+    'manage_permissions': {
         'source_filenames': (
-            'css/locale_manage.css',
+            'css/manage_permissions.css',
         ),
-        'output_filename': 'css/locale_manage.min.css',
+        'output_filename': 'css/manage_permissions.min.css',
     },
     'locale_project': {
         'source_filenames': (
@@ -252,6 +285,8 @@ PIPELINE_CSS = {
     },
     'translate': {
         'source_filenames': (
+            'css/jquery-ui.css',
+            'css/jquery-ui-timepicker-addon.css',
             'css/translate.css',
         ),
         'output_filename': 'css/translate.min.css',
@@ -298,17 +333,17 @@ PIPELINE_JS = {
     },
     'main': {
         'source_filenames': (
-            'js/jquery-1.11.1.min.js',
+            'js/lib/jquery-1.11.1.min.js',
             'js/main.js',
-            'js/jquery.timeago.js',
+            'js/lib/jquery.timeago.js',
         ),
         'output_filename': 'js/main.min.js',
     },
-    'locale_manage': {
+    'manage_permissions': {
         'source_filenames': (
-            'js/locale_manage.js',
+            'js/manage_permissions.js',
         ),
-        'output_filename': 'js/locale_manage.min.js',
+        'output_filename': 'js/manage_permissions.min.js',
     },
     'locale': {
         'source_filenames': (
@@ -318,6 +353,11 @@ PIPELINE_JS = {
     },
     'translate': {
         'source_filenames': (
+            'js/lib/jquery-ui.js',
+            'js/lib/jquery-ui-timepicker-addon.js',
+            'js/lib/jquery.mark.js',
+            'js/lib/highstock.js',
+            'js/lib/diff.js',
             'js/translate.js',
             'js/request_projects.js',
         ),
@@ -331,14 +371,14 @@ PIPELINE_JS = {
     },
     'search': {
         'source_filenames': (
-            'js/clipboard.min.js',
+            'js/lib/clipboard.min.js',
             'js/search.js',
         ),
         'output_filename': 'js/search.min.js',
     },
     'multiple_locale_selector': {
         'source_filenames': (
-            'js/jquery-ui-1.11.4.min.js',
+            'js/lib/jquery-ui.js',
             'js/multiple_locale_selector.js',
         ),
         'output_filename': 'js/multiple_locale_selector.min.js',
@@ -437,9 +477,6 @@ LOGGING = {
             'handlers': ['console'],
             'level': os.environ.get('DJANGO_LOG_LEVEL', 'INFO'),
         },
-        'django_browserid': {
-            'handlers': ['console'],
-        },
     }
 }
 
@@ -455,21 +492,17 @@ if os.environ.get('DJANGO_SQL_LOG', False):
 
 ## Tests
 TEST_RUNNER = 'django_nose.NoseTestSuiteRunner'
-NOSE_ARGS = ['--logging-filter=-django_browserid,-factory,-django.db,-raygun4py',
+NOSE_ARGS = ['--logging-filter=-factory,-django.db,-raygun4py',
              '--logging-clear-handlers']
 
 # Disable nose-progressive on CI due to ugly output.
 if not os.environ.get('CI', False):
     NOSE_ARGS.append('--with-progressive')
 
-# Set X-Frame-Options to DENY by default on all responses.
-X_FRAME_OPTIONS = 'DENY'
-
-# django-browserid
+# General auth settings
 LOGIN_URL = '/'
 LOGIN_REDIRECT_URL = '/'
 LOGIN_REDIRECT_URL_FAILURE = '/'
-BROWSERID_REQUEST_ARGS = {'siteName': 'Pontoon'}
 
 # Should robots.txt deny everything or disallow a calculated list of
 # URLs we don't want to be crawled?  Default is false, disallow
@@ -479,8 +512,49 @@ ENGAGE_ROBOTS = False
 # Always generate a CSRF token for anonymous users.
 ANON_ALWAYS = True
 
+# Set X-Frame-Options to DENY by default on all responses.
+X_FRAME_OPTIONS = 'DENY'
+
 # Use correct header for detecting HTTPS on Heroku.
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
+# Strict-Transport-Security: max-age=63072000
+# Ensures users only visit the site over HTTPS
+SECURE_HSTS_SECONDS = 63072000
+
+# X-Content-Type-Options: nosniff
+# Disables browser MIME type sniffing
+SECURE_CONTENT_TYPE_NOSNIFF = True
+
+# x-xss-protection: 1; mode=block
+# Activates the browser's XSS filtering and helps prevent XSS attacks
+SECURE_BROWSER_XSS_FILTER = True
+
+# Content-Security-Policy headers
+CSP_DEFAULT_SRC = ("'none'",)
+CSP_CHILD_SRC = ("https:",)
+CSP_FRAME_SRC = ("https:",)  # Older browsers
+CSP_CONNECT_SRC = ("'self'",)
+CSP_FONT_SRC = ("'self'",)
+CSP_IMG_SRC = (
+    "'self'",
+    "https://*.wp.com/pontoon.mozilla.org/",
+    "https://ssl.google-analytics.com",
+    "https://www.gravatar.com/avatar/",
+)
+CSP_SCRIPT_SRC = (
+    "'self'",
+    "'unsafe-eval'",
+    "'sha256-x3niK4UU+vG6EGT2NK2rwi2j/etQodJd840oRpEnqd4='",
+    "'sha256-fDsgbzHC0sNuBdM4W91nXVccgFLwIDkl197QEca/Cl4='",
+    "https://ssl.google-analytics.com/ga.js",
+)
+CSP_STYLE_SRC = ("'self'", "'unsafe-inline'",)
+
+# Needed if site not hosted on HTTPS domains (like local setup)
+if not (HEROKU_DEMO or SITE_URL.startswith('https')):
+    CSP_IMG_SRC = CSP_IMG_SRC + ("http://www.gravatar.com/avatar/",)
+    CSP_CHILD_SRC = CSP_FRAME_SRC = CSP_FRAME_SRC + ("http:",)
 
 # For absolute urls
 try:
@@ -550,9 +624,11 @@ MICROSOFT_TERMINOLOGY_LOCALES = [
 # Contributors to exclude from Top Contributors list
 EXCLUDE = os.environ.get('EXCLUDE', '').split(',')
 
-SYNC_TASK_TIMEOUT = 60 * 60 * 4  # 4 hours
+SYNC_TASK_TIMEOUT = 60 * 60 * 1  # 1 hour
 
 SYNC_LOG_RETENTION = 90  # days
+
+MANUAL_SYNC = os.environ.get('MANUAL_SYNC', 'False') != 'False'
 
 # Celery
 
@@ -577,3 +653,38 @@ CELERY_SEND_EVENTS = False  # We aren't yet monitoring events
 # require Access-Control-Allow-Origin header to be set as '*'.
 CORS_ORIGIN_ALLOW_ALL = True
 CORS_URLS_REGEX = r'^/pontoon\.js$'
+
+SOCIALACCOUNT_ENABLED = True
+SOCIALACCOUNT_ADAPTER = 'pontoon.base.adapter.PontoonSocialAdapter'
+
+def account_username(user):
+    return user.name_or_email
+
+ACCOUNT_AUTHENTICATED_METHOD = 'email'
+ACCOUNT_EMAIL_REQUIRED = True
+ACCOUNT_EMAIL_VERIFICATION = 'none'
+ACCOUNT_USER_DISPLAY = account_username
+
+# Firefox Accounts
+FXA_CLIENT_ID = os.environ.get('FXA_CLIENT_ID', '')
+FXA_SECRET_KEY = os.environ.get('FXA_SECRET_KEY', '')
+FXA_OAUTH_ENDPOINT = os.environ.get('FXA_OAUTH_ENDPOINT', '')
+FXA_PROFILE_ENDPOINT = os.environ.get('FXA_PROFILE_ENDPOINT', '')
+FXA_SCOPE = ['profile:uid', 'profile:display_name', 'profile:email']
+
+# All settings related to the AllAuth
+SOCIALACCOUNT_PROVIDERS = {
+    'fxa': {
+        'SCOPE': FXA_SCOPE,
+        'OAUTH_ENDPOINT': FXA_OAUTH_ENDPOINT,
+        'PROFILE_ENDPOINT': FXA_PROFILE_ENDPOINT,
+    }
+}
+
+# Defined all trusted origins that will be returned in pontoon.js file.
+if os.environ.get('JS_TRUSTED_ORIGINS'):
+    JS_TRUSTED_ORIGINS = os.environ.get('JS_TRUSTED_ORIGINS').split(',')
+else:
+    JS_TRUSTED_ORIGINS = [
+        SITE_URL,
+    ]

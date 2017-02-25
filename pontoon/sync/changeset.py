@@ -3,6 +3,7 @@ import logging
 import os
 
 from bulk_update.helper import bulk_update
+from django.db.models import Prefetch
 
 from pontoon.base.models import (
     Entity,
@@ -12,7 +13,6 @@ from pontoon.base.models import (
     TranslationMemoryEntry
 )
 from pontoon.base.utils import match_attr
-from pontoon.sync.utils import locale_directory_path
 
 log = logging.getLogger(__name__)
 
@@ -22,7 +22,7 @@ class ChangeSet(object):
     translations stored in VCS. Once all the necessary changes have been
     stored, execute all the changes at once efficiently.
     """
-    def __init__(self, db_project, vcs_project, now, obsolete_vcs_entities=None, obsolete_vcs_resources=None):
+    def __init__(self, db_project, vcs_project, now, obsolete_vcs_entities=None, obsolete_vcs_resources=None, locale=None):
         """
         :param now:
             Datetime to use for marking when approvals happened.
@@ -30,6 +30,7 @@ class ChangeSet(object):
         self.db_project = db_project
         self.vcs_project = vcs_project
         self.now = now
+        self.locale = locale
 
         # Store locales and resources for FK relationships.
         self.locales = {l.code: l for l in Locale.objects.all()}
@@ -128,7 +129,7 @@ class ChangeSet(object):
             self.locales_to_commit = set(self.locales.values())
 
         for resource in changed_resources:
-            resource.save()
+            resource.save(self.locale)
 
     def get_entity_updates(self, vcs_entity):
         """
@@ -228,7 +229,37 @@ class ChangeSet(object):
                 if translation.is_dirty():
                     self.translations_to_update.append(translation)
 
+    def prefetch_entity_translations(self):
+        prefetched_entities = {}
+
+        locale_entities = {}
+        for locale_code, db_entity, vcs_entity in self.changes['update_db']:
+            locale_entities.setdefault(locale_code, []).append(db_entity.pk)
+
+        for locale in locale_entities.keys():
+            entities_qs = Entity.objects.filter(
+                pk__in=locale_entities[locale],
+            ).prefetch_related(
+                Prefetch(
+                    'translation_set',
+                    queryset=Translation.objects.filter(locale__code=locale),
+                    to_attr='db_translations'
+                )
+            ).prefetch_related(
+                Prefetch(
+                    'translation_set',
+                    queryset=Translation.objects.filter(locale__code=locale, approved_date__lte=self.now),
+                    to_attr='old_translations'
+                )
+            )
+            prefetched_entities[locale] = {entity.id: entity for entity in entities_qs}
+
+        return prefetched_entities
+
     def execute_update_db(self):
+        if self.changes['update_db']:
+            entities_with_translations = self.prefetch_entity_translations()
+
         for locale_code, db_entity, vcs_entity in self.changes['update_db']:
             for field, value in self.get_entity_updates(vcs_entity).items():
                 setattr(db_entity, field, value)
@@ -239,7 +270,11 @@ class ChangeSet(object):
             if locale_code is not None:
                 # Update translations for the entity.
                 vcs_translation = vcs_entity.translations[locale_code]
-                self.update_entity_translations_from_vcs(db_entity, locale_code, vcs_translation)
+                prefetched_entity = entities_with_translations[locale_code][db_entity.id]
+                self.update_entity_translations_from_vcs(
+                    db_entity, locale_code, vcs_translation, None,
+                    prefetched_entity.db_translations, prefetched_entity.old_translations
+                )
 
     def execute_obsolete_db(self):
         (Entity.objects
@@ -248,11 +283,10 @@ class ChangeSet(object):
 
     def execute_obsolete_vcs_resources(self):
         for path in self.changes['obsolete_vcs_resources']:
-            for locale in self.db_project.locales.all():
-                file_path = os.path.join(
-                    locale_directory_path(self.vcs_project.checkout_path, locale.code),
-                    path
-                )
+            locales = [self.locale] if self.locale else self.db_project.locales.all()
+            for locale in locales:
+                locale_directory = self.vcs_project.locale_directory_paths[locale.code]
+                file_path = os.path.join(locale_directory, path)
                 if os.path.exists(file_path):
                     log.info('Removing obsolete file {} for {}.'.format(path, locale.code))
                     os.remove(file_path)

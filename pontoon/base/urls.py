@@ -28,8 +28,33 @@ urlpatterns = [
     url(r'^contributor/(?P<email>[\w.%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,4})/$',
         RedirectView.as_view(url="/contributors/%(email)s/", permanent=True)),
 
+    # List contributors
+    url(r'^contributors/$',
+        views.ContributorsView.as_view(),
+        name='pontoon.contributors'),
+
+    # Contributor profile by email
+    url(r'^contributors/(?P<email>[\w.%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,4})/$',
+        views.contributor_email,
+        name='pontoon.contributor.email'),
+
+    # Contributor timeline
+    url(r'^contributors/(?P<username>[\w-]+)/timeline/$',
+        views.contributor_timeline,
+        name='pontoon.contributor.timeline'),
+
+    # Contributor profile by username
+    url(r'^contributors/(?P<username>[\w-]+)/$',
+        views.contributor_username,
+        name='pontoon.contributor.username'),
+
+    # Current user profile
+    url(r'^profile/$',
+        views.profile,
+        name='pontoon.profile'),
+
     # API: Toogle user profile attribute
-    url(r'^api/v1/user/(?P<email>[\w.%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,4})/$',
+    url(r'^api/v1/user/(?P<username>[\w-]+)/$',
         views.toggle_user_profile_attribute,
         name='pontoon.toggle_user_profile_attribute'),
 
@@ -67,14 +92,24 @@ urlpatterns = [
         views.ProjectContributorsView.as_view(),
         name='pontoon.project.contributors'),
 
+    # Sync project
+    url(r'^projects/(?P<slug>[\w-]+)/sync/$',
+        views.manually_sync_project,
+        name='pontoon.project.sync'),
+
     # List team contributors
     url(r'^(?P<code>[A-Za-z0-9\-\@\.]+)/contributors/$',
         views.LocaleContributorsView.as_view(),
         name='pontoon.locale.contributors'),
 
-    # Manage team
+    # Team permissions
+    url(r'^(?P<locale>[A-Za-z0-9\-\@\.]+)/permissions/$',
+        views.locale_permissions,
+        name='pontoon.locale.permissions'),
+
+    # Legacy url for the locale management panel.
     url(r'^(?P<locale>[A-Za-z0-9\-\@\.]+)/manage/$',
-        views.locale_manage,
+        RedirectView.as_view(url='/%(locale)s/permissions/', permanent=True),
         name='pontoon.locale.manage'),
 
     # AJAX: Request project to be added to locale
@@ -91,21 +126,6 @@ urlpatterns = [
     url(r'^(?P<locale>[A-Za-z0-9\-\@\.]+)/(?P<slug>[\w-]+)/$',
         views.locale_project,
         name='pontoon.locale.project'),
-
-    # List contributors
-    url(r'^contributors/$',
-        views.ContributorsView.as_view(),
-        name='pontoon.contributors'),
-
-    # Contributor profile
-    url(r'^contributors/(?P<email>[\w.%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,4})/$',
-        views.contributor,
-        name='pontoon.contributor'),
-
-    # Current user profile
-    url(r'^profile/$',
-        views.profile,
-        name='pontoon.profile'),
 
     # Terminology Search
     url(r'^terminology/$',
@@ -130,6 +150,8 @@ urlpatterns = [
         name='pontoon.update'),
     url(r'^get-history/', views.get_translation_history,
         name='pontoon.get_history'),
+    url(r'^unapprove-translation/', views.unapprove_translation,
+        name='pontoon.unapprove_translation'),
     url(r'^delete-translation/', views.delete_translation,
         name='pontoon.delete_translation'),
     url(r'^translation-memory/$', views.translation_memory,
@@ -154,6 +176,10 @@ urlpatterns = [
         name='pontoon.csrf'),
     url(r'^settings/', views.user_settings,
         name='pontoon.user_settings'),
+
+    # Urls related to integration with Heroku
+    url(r'^heroku-setup/', views.heroku_setup,
+        name='pontoon.heroku_setup'),
 
     # Team page: Must be at the end
     url(r'^(?P<locale>[A-Za-z0-9\-\@\.]+)/$',

@@ -6,18 +6,24 @@ on Heroku, you must first create an app on your Heroku dashboard. The steps
 below assume you've already created an app and have installed the
 `Heroku Toolbelt`_.
 
+For quick and easy deployment without leaving your web browser, click this button:
+
+.. image:: https://www.herokucdn.com/deploy/button.svg
+   :target: https://heroku.com/deploy?template=https://github.com/mozilla/pontoon/tree/master
+
 .. _Heroku Toolbelt: https://toolbelt.heroku.com/
 
 Buildpack
 ---------
 Pontoon uses several buildpacks in a specific order. They are (in order):
 
-1. `heroku-buildpack-apt`_ for installing Subversion.
-2. `heroku-buildpack-ssh`_ for setting up the SSH keys necessary for committing
+1. `heroku-buildpack-submodules`_ to fetch all related git submodules.
+2. `heroku-buildpack-apt`_ for installing Subversion.
+3. `heroku-buildpack-ssh`_ for setting up the SSH keys necessary for committing
    to version control.
-3. The official ``heroku/nodejs`` buildpack for installing Node.js programs for
+4. The official ``heroku/nodejs`` buildpack for installing Node.js programs for
    pre-processing frontend assets.
-3. The official ``heroku/python`` buildpack as our primary buildpack.
+5. The official ``heroku/python`` buildpack as our primary buildpack.
 
 You can set these buildpacks on your app with the following toolbelt commands:
 
@@ -28,7 +34,9 @@ You can set these buildpacks on your app with the following toolbelt commands:
    heroku buildpacks:add --index 1 heroku/nodejs
    heroku buildpacks:add --index 1 https://github.com/Osmose/heroku-buildpack-ssh.git#v0.1
    heroku buildpacks:add --index 1 https://github.com/mozilla/heroku-buildpack-apt.git#v0.1
+   heroku buildpacks:add --index 1 https://github.com/dmathieu/heroku-buildpack-submodules#b37ffe4361bb9c975dd8e93068c9d296365d748c
 
+.. _heroku-buildpack-submodules: https://github.com/dmathieu/heroku-buildpack-submodules
 .. _heroku-buildpack-apt: https://github.com/mozilla/heroku-buildpack-apt
 .. _heroku-buildpack-ssh: https://github.com/Osmose/heroku-buildpack-ssh
 
@@ -77,6 +85,9 @@ you create:
 ``NEW_RELIC_APP_NAME``
    Optional. Name to give to this app on New Relic. Required if you're using
    New Relic.
+
+``PROJECT_MANAGERS``
+   Optional. A list of project manager email addresses to send project requests to
 
 ``SECRET_KEY``
    Required. Secret key used for sessions, cryptographic signing, etc.

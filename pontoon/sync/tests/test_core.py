@@ -139,7 +139,7 @@ class UpdateTranslatedResourcesTests(FakeCheckoutTestCase):
         available in the current locale.
         """
         update_translated_resources(self.db_project, self.vcs_project,
-                             self.changeset, self.translated_locale)
+                                    self.translated_locale)
 
         assert_true(TranslatedResource.objects.filter(
             resource=self.main_db_resource, locale=self.translated_locale
@@ -162,7 +162,7 @@ class UpdateTranslatedResourcesTests(FakeCheckoutTestCase):
             is_asymmetric.return_value = True
 
             update_translated_resources(self.db_project, self.vcs_project,
-                                 self.changeset, self.translated_locale)
+                                        self.translated_locale)
 
             assert_true(TranslatedResource.objects.filter(
                 resource=self.main_db_resource, locale=self.translated_locale
@@ -182,7 +182,7 @@ class UpdateTranslatedResourcesTests(FakeCheckoutTestCase):
         even if the inactive locale has a resource.
         """
         update_translated_resources(self.db_project, self.vcs_project,
-                             self.changeset, self.translated_locale)
+                                    self.translated_locale)
 
         assert_true(TranslatedResource.objects.filter(
             resource=self.main_db_resource, locale=self.translated_locale
@@ -288,20 +288,14 @@ class PullChangesTests(FakeCheckoutTestCase):
     def test_basic(self):
         """
         Pull_changes should call repo.pull for each repo for the
-        project, save the return value to repo.last_synced_revisions,
-        and return whether any changes happened in VCS.
+        project and return whether any changes happened in VCS.
         """
         mock_db_project = MagicMock()
         mock_db_project.repositories.all.return_value = [self.repository]
         self.mock_repo_pull.return_value = {'single_locale': 'asdf'}
 
-        has_changed, revisions = pull_changes(self.db_project)
+        has_changed, _ = pull_changes(self.db_project)
         assert_true(has_changed)
-        assert_equal(revisions, {self.repository.pk: {'single_locale': 'asdf'}})
-        self.repository.last_synced_revisions = revisions[self.repository.pk]
-        self.repository.save()
-        self.repository.refresh_from_db()
-        assert_equal(self.repository.last_synced_revisions, {'single_locale': 'asdf'})
 
     def test_unsure_changes(self):
         """
@@ -312,7 +306,8 @@ class PullChangesTests(FakeCheckoutTestCase):
         self.repository.last_synced_revisions = {'single_locale': None}
         self.repository.save()
 
-        assert_true(pull_changes(self.db_project))
+        has_changed, _ = pull_changes(self.db_project)
+        assert_true(has_changed)
 
     def test_unchanged(self):
         """

@@ -62,10 +62,13 @@ class SyncLogTests(TestCase):
             start_time=aware_datetime(2015, 1, 1),
             end_time=None
         )
+        del sync_log.finished
         assert_false(sync_log.finished)
 
         repo_log.end_time = aware_datetime(2015, 1, 2)
         repo_log.save()
+
+        del sync_log.finished
         assert_true(sync_log.finished)
 
 
@@ -81,17 +84,14 @@ class ProjectSyncLogTests(TestCase):
         Return the latest end time among repo sync logs for this log.
         """
         project = ProjectFactory.create(repositories=[])
-        repo1, repo2 = RepositoryFactory.create_batch(2, project=project)
+        source_repo, repo1, repo2 = RepositoryFactory.create_batch(3, project=project)
         project_sync_log = ProjectSyncLogFactory.create(project=project)
 
         RepositorySyncLogFactory.create(project_sync_log=project_sync_log,
                                         repository=repo1,
                                         end_time=aware_datetime(2015, 1, 1))
-        RepositorySyncLogFactory.create(project_sync_log=project_sync_log,
-                                        repository=repo2,
-                                        end_time=aware_datetime(2015, 1, 2))
 
-        assert_equal(project_sync_log.end_time, aware_datetime(2015, 1, 2))
+        assert_equal(project_sync_log.end_time, aware_datetime(2015, 1, 1))
 
     def test_end_time_skipped(self):
         """
@@ -122,6 +122,9 @@ class ProjectSyncLogTests(TestCase):
             start_time=aware_datetime(2015, 1, 1),
             end_time=aware_datetime(2015, 1, 1, 1),
         )
+
+        del project_sync_log.finished
+        del project_sync_log.status
         assert_equal(project_sync_log.status, ProjectSyncLog.SYNCED)
 
         # Skipped projects are just "skipped".
@@ -129,6 +132,7 @@ class ProjectSyncLogTests(TestCase):
             project__repositories=[repo],
             skipped=True,
         )
+
         assert_equal(skipped_log.status, ProjectSyncLog.SKIPPED)
 
     def test_finished(self):
@@ -144,10 +148,14 @@ class ProjectSyncLogTests(TestCase):
             start_time=aware_datetime(2015, 1, 1),
             end_time=None
         )
+
+        del project_sync_log.finished
         assert_false(project_sync_log.finished)
 
         repo_log.end_time = aware_datetime(2015, 1, 2)
         repo_log.save()
+
+        del project_sync_log.finished
         assert_true(project_sync_log.finished)
 
     def test_finished_skipped(self):
@@ -163,4 +171,6 @@ class RepositorySyncLogTests(TestCase):
 
         log.end_time = aware_datetime(2015, 1, 1)
         log.save()
+
+        del log.finished
         assert_true(log.finished)
