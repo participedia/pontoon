@@ -3,25 +3,25 @@ from __future__ import division
 import json
 import logging
 import math
+import os
 import requests
-import xml.etree.ElementTree as ET
 import urllib
+import xml.etree.ElementTree as ET
 
 from bulk_update.helper import bulk_update
 from collections import defaultdict
 from dateutil.relativedelta import relativedelta
-
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.models import User
-from django.core.exceptions import ValidationError, ImproperlyConfigured
+from django.contrib.sites.models import Site
+from django.core.cache import cache
+from django.core.exceptions import ImproperlyConfigured
 from django.core.mail import EmailMessage
 from django.core.paginator import Paginator, EmptyPage
-from django.core.validators import validate_comma_separated_integer_list
 from django.db import transaction, DataError
-from django.db.models import Count, F, Q
-
+from django.db.models import Count, Q
 from django.http import (
     Http404,
     HttpResponse,
@@ -29,7 +29,6 @@ from django.http import (
     HttpResponseForbidden,
     JsonResponse,
 )
-
 from django.shortcuts import get_object_or_404, render, redirect
 from django.utils import timezone
 from django.utils.datastructures import MultiValueDictKeyError
@@ -38,11 +37,10 @@ from django.views.decorators.http import require_POST
 from django.views.generic import TemplateView
 from django.views.generic.detail import DetailView
 from guardian.decorators import permission_required_or_403
+from suds.client import Client, WebFault
 
 from pontoon.base import forms
 from pontoon.base import utils
-from pontoon.base.utils import require_AJAX
-
 from pontoon.base.models import (
     ChangedEntityLocale,
     Entity,
@@ -55,9 +53,9 @@ from pontoon.base.models import (
     TranslationMemoryEntry,
     UserProfile,
 )
-
-from session_csrf import anonymous_csrf_exempt
-from suds.client import Client, WebFault
+from pontoon.base.utils import require_AJAX
+from pontoon.sync.models import SyncLog
+from pontoon.sync.tasks import sync_project
 
 
 log = logging.getLogger('pontoon')
@@ -94,42 +92,48 @@ def locale(request, locale):
 @login_required(redirect_field_name='', login_url='/403')
 @permission_required_or_403('base.can_manage_locale', (Locale, 'code', 'locale'))
 @transaction.atomic
-def locale_manage(request, locale):
+def locale_permissions(request, locale):
     l = get_object_or_404(Locale, code__iexact=locale)
-
-    def update_group(group, name):
-        current = set(group.user_set.values_list("id", flat=True))
-        selected = request.POST[name]
-        new = set()
-
-        if selected:
-            try:
-                # TODO: Use ModelMultipleChoiceField
-                validate_comma_separated_integer_list(selected)
-                new = set(map(int, selected.split(',')))
-            except ValidationError as e:
-                log.error(e)
-                return HttpResponseBadRequest(e)
-
-        if current != new:
-            group.user_set = User.objects.filter(pk__in=new)
-            group.save()
+    project_locales = l.project_locale.available()
 
     if request.method == 'POST':
-        update_group(l.translators_group, 'translators')
-        update_group(l.managers_group, 'managers')
+        locale_form = forms.LocalePermsForm(request.POST, instance=l, prefix='general')
+        project_locale_form = forms.ProjectLocalePermsFormsSet(
+            request.POST,
+            prefix='project-locale',
+            queryset=project_locales,
+        )
+
+        if locale_form.is_valid() and project_locale_form.is_valid():
+            locale_form.save()
+            project_locale_form.save()
+
+        else:
+            errors = locale_form.errors
+            errors.update(project_locale_form.errors_dict)
+            return HttpResponseBadRequest(json.dumps(errors))
+
+    else:
+        project_locale_form = forms.ProjectLocalePermsFormsSet(
+            prefix='project-locale',
+            queryset=project_locales,
+        )
 
     managers = l.managers_group.user_set.all()
     translators = l.translators_group.user_set.exclude(pk__in=managers).all()
-    all_users = User.objects.exclude(pk__in=managers).exclude(pk__in=translators).exclude(email="")
-    contributors = User.translators.filter(translation__locale=l).distinct()
+    all_users = User.objects.exclude(pk__in=managers).exclude(pk__in=translators).exclude(email='')
 
-    return render(request, 'locale_manage.html', {
+    contributors = User.translators.filter(translation__locale=l).values_list('email', flat=True).distinct()
+    locale_projects = l.projects_permissions
+    return render(request, 'locale_permissions.html', {
         'locale': l,
         'all_users': all_users,
         'contributors': contributors,
         'translators': translators,
         'managers': managers,
+        'locale_projects': locale_projects,
+        'project_locale_form': project_locale_form,
+        'all_projects_in_translation': all([x[5] for x in locale_projects])
     })
 
 
@@ -171,6 +175,21 @@ def projects(request):
     return render(request, 'projects.html', {
         'projects': projects,
     })
+
+
+@login_required(redirect_field_name='', login_url='/403')
+@require_AJAX
+def manually_sync_project(request, slug):
+    if not request.user.has_perm('base.can_manage') or not settings.MANUAL_SYNC:
+        return HttpResponseForbidden(
+            "Forbidden: You don't have permission for syncing projects"
+        )
+
+    sync_log = SyncLog.objects.create(start_time=timezone.now())
+    project = Project.objects.get(slug=slug)
+    sync_project.delay(project.pk, sync_log.pk)
+
+    return HttpResponse('ok')
 
 
 def locale_project(request, locale, slug):
@@ -235,7 +254,7 @@ def translate(request, locale, slug, part):
     )
 
     paths = [part] if part != 'all-resources' else None
-    authors = Translation.authors(locale, project, paths).serialize()
+    translations = Translation.for_locale_project_paths(locale, project, paths)
 
     return render(request, 'translate.html', {
         'download_form': forms.DownloadFileForm(),
@@ -245,55 +264,76 @@ def translate(request, locale, slug, part):
         'part': part,
         'project': project,
         'projects': projects,
-        'authors': authors,
+        'authors': translations.authors().serialize(),
+        'counts_per_minute': translations.counts_per_minute(),
     })
 
 
 @login_required(redirect_field_name='', login_url='/403')
 def profile(request):
     """Current user profile."""
-    return contributor(request, request.user.email)
+    return contributor(request, request.user)
 
 
-def contributor(request, email):
-    """Contributor profile."""
+def contributor_email(request, email):
     user = get_object_or_404(User, email=email)
+    return contributor(request, user)
 
-    # Exclude unchanged translations
-    translations = (
-        Translation.objects.filter(user=user)
-        .exclude(string=F('entity__string'))
-        .exclude(string=F('entity__string_plural'))
-    )
+
+def contributor_username(request, username):
+    user = get_object_or_404(User, username=username)
+    return contributor(request, user)
+
+
+def contributor_timeline(request, username):
+    """Contributor events in the timeline."""
+    user = get_object_or_404(User, username=username)
+    try:
+        page = int(request.GET.get('page', 1))
+    except ValueError:
+        raise Http404('Invalid page number.')
 
     # Exclude obsolete translations
-    current = translations.exclude(entity__obsolete=True) \
-        .extra({'day': "date(date)"}).order_by('day')
+    contributor_translations = (
+        user.contributed_translations
+            .exclude(entity__obsolete=True)
+            .extra({'day': "date(date)"})
+            .order_by('-day')
+    )
 
-    # Timeline
-    timeline = [{
-        'date': user.date_joined,
-        'type': 'join',
-    }]
+    counts_by_day = contributor_translations.values('day').annotate(count=Count('id'))
 
-    for event in current.values('day').annotate(count=Count('id')):
-        daily = current.filter(date__startswith=event['day'])
-        example = daily[0]
+    try:
+        events_paginator = Paginator(counts_by_day, 10)
+        timeline_events = []
 
-        timeline.append({
-            'date': example.date,
-            'type': 'translation',
-            'count': event['count'],
-            'project': example.entity.resource.project,
-            'translation': example,
-        })
+        timeline_events = User.objects.map_translations_to_events(
+            events_paginator.page(page).object_list,
+            contributor_translations
+        )
 
-    timeline.reverse()
+        # Join is the last event in this reversed order.
+        if page == events_paginator.num_pages:
+            timeline_events.append({
+                'date': user.date_joined,
+                'type': 'join'
+            })
+
+    except EmptyPage:
+        # Return the join event if user reaches the last page.
+        raise Http404('No events.')
+
+    return render(request, 'user_timeline.html', {
+       'events': timeline_events
+    })
+
+
+def contributor(request, user):
+    """Contributor profile."""
 
     return render(request, 'user.html', {
         'contributor': user,
-        'timeline': timeline,
-        'translations': translations,
+        'translations': user.contributed_translations
     })
 
 
@@ -402,7 +442,10 @@ def entities(request):
     project = get_object_or_404(Project, slug=project)
     locale = get_object_or_404(Locale, code__iexact=locale)
 
-    filter_type = request.POST.get('filter', '')
+    status = request.POST.get('status', '')
+    extra = request.POST.get('extra', '')
+    time = request.POST.get('time', '')
+    author = request.POST.get('author', '')
     search = request.POST.get('search', '')
     exclude_entities = request.POST.getlist('excludeEntities[]', [])
 
@@ -415,15 +458,17 @@ def entities(request):
             .distinct()
             .order_by('order')
         )
+        translations = Translation.for_locale_project_paths(locale, project, paths)
 
         return JsonResponse({
             'entities': Entity.map_entities(locale, entities),
             'stats': TranslatedResource.objects.stats(project, paths, locale),
-            'authors': Translation.authors(locale, project, paths).serialize(),
+            'authors': translations.authors().serialize(),
+            'counts_per_minute': translations.counts_per_minute(),
         }, safe=False)
 
     entities = Entity.for_project_locale(
-        project, locale, paths, filter_type, search, exclude_entities
+        project, locale, paths, status, search, exclude_entities, extra, time, author
     )
 
     # Only return a list of entity PKs (batch editing: select all)
@@ -452,7 +497,8 @@ def entities(request):
             return JsonResponse({
                 'has_next': False,
                 'stats': {},
-                'authors': []
+                'authors': [],
+                'counts_per_minute': [],
             })
 
         has_next = entities_page.has_next()
@@ -471,11 +517,14 @@ def entities(request):
                 if entity_pk in entities.values_list('pk', flat=True):
                     entities_to_map = list(entities_to_map) + list(entities.filter(pk=entity_pk))
 
+    translations = Translation.for_locale_project_paths(locale, project, paths)
+
     return JsonResponse({
         'entities': Entity.map_entities(locale, entities_to_map, visible_entities),
         'has_next': has_next,
         'stats': TranslatedResource.objects.stats(project, paths, locale),
-        'authors': Translation.authors(locale, project, paths).serialize(),
+        'authors': translations.authors().serialize(),
+        'counts_per_minute': translations.counts_per_minute(),
     }, safe=False)
 
 
@@ -493,16 +542,24 @@ def batch_edit_translations(request):
 
     locale = get_object_or_404(Locale, code=l)
 
-    # Batch editing is only available to translators
-    if not request.user.has_perm('base.can_translate_locale', locale):
-        return HttpResponseForbidden(
-            "Forbidden: You don't have permission for batch editing"
-        )
-
     entities = (
         Entity.objects.filter(pk__in=entity_pks)
         .prefetch_resources_translations(locale)
     )
+
+    if not entities.exists():
+        return JsonResponse({'count': 0})
+
+
+    projects = Project.objects.filter(pk__in=entities.values_list('resource__project__pk', flat=True).distinct())
+
+    # Batch editing is only available to translators.
+    # Check if user has translate permissions for all of the projects in passed entities.
+    for project in projects:
+        if not request.user.can_translate(project=project, locale=locale):
+            return HttpResponseForbidden(
+                "Forbidden: You don't have permission for batch editing"
+            )
 
     translation_pks = set()
 
@@ -636,21 +693,53 @@ def get_translation_history(request):
 
     for t in translations:
         u = t.user
-        a = t.approved_user
-        o = {
+        payload.append({
             "id": t.id,
             "user": "Imported" if u is None else u.name_or_email,
-            "email": "" if u is None else u.email,
+            "uid": "" if u is None else u.id,
+            "username": "" if u is None else u.username,
             "translation": t.string,
             "date": t.date.strftime('%b %d, %Y %H:%M'),
             "date_iso": t.date.isoformat() + offset,
             "approved": t.approved,
-            "approved_user": "" if a is None else a.name_or_email,
+            "approved_user": User.display_name_or_blank(t.approved_user),
+            "unapproved_user": User.display_name_or_blank(t.unapproved_user),
             "fuzzy": t.fuzzy,
-        }
-        payload.append(o)
+        })
 
     return JsonResponse(payload, safe=False)
+
+
+@require_AJAX
+@login_required(redirect_field_name='', login_url='/403')
+@transaction.atomic
+def unapprove_translation(request):
+    """Unapprove given translation."""
+    try:
+        t = request.POST['translation']
+        paths = request.POST.getlist('paths[]')
+    except MultiValueDictKeyError as e:
+        return HttpResponseBadRequest('Bad Request: {error}'.format(error=e))
+
+    translation = Translation.objects.get(pk=t)
+
+    # Only privileged users or authors can un-approve translations
+    if not (request.user.can_translate(project=translation.entity.resource.project, locale=translation.locale)
+            or request.user == translation.user
+            or translation.approved):
+        return HttpResponseForbidden("Forbidden: You can't unapprove this translation.")
+
+    translation.unapprove(request.user)
+    latest_translation = translation.entity.translation_set.filter(
+        locale=translation.locale,
+        plural_form=translation.plural_form,
+    ).latest('date').serialize()
+    project = translation.entity.resource.project
+    locale = translation.locale
+    return JsonResponse({
+        'translation': latest_translation,
+        'stats': TranslatedResource.objects.stats(project, paths, locale),
+    })
 
 
 @require_AJAX
@@ -666,7 +755,7 @@ def delete_translation(request):
     translation = get_object_or_404(Translation, pk=t)
 
     # Non-privileged users can only delete own unapproved translations
-    if not request.user.has_perm('base.can_translate_locale', translation.locale):
+    if not request.user.can_translate(translation.locale, translation.entity.resource.project):
         if translation.user == request.user:
             if translation.approved is True:
                 return HttpResponseForbidden(
@@ -681,15 +770,18 @@ def delete_translation(request):
 
     project = translation.entity.resource.project
     locale = translation.locale
+    translations = Translation.for_locale_project_paths(locale, project, paths)
+
     return JsonResponse({
         'stats': TranslatedResource.objects.stats(project, paths, locale),
-        'authors': Translation.authors(locale, project, paths).serialize(),
+        'authors': translations.authors().serialize(),
+        'counts_per_minute': translations.counts_per_minute(),
     })
 
 
-@anonymous_csrf_exempt
 @require_POST
 @require_AJAX
+@login_required(redirect_field_name='', login_url='/403')
 @transaction.atomic
 def update_translation(request):
     """Update entity translation for the specified locale and user."""
@@ -722,12 +814,6 @@ def update_translation(request):
 
     user = request.user
     project = e.resource.project
-    if not request.user.is_authenticated():
-        if project.pk != 1:
-            log.error("Not authenticated")
-            return HttpResponse("error")
-        else:
-            user = None
 
     try:
         quality_checks = UserProfile.objects.get(user=user).quality_checks
@@ -740,7 +826,7 @@ def update_translation(request):
 
     now = timezone.now()
     can_translate = (
-        request.user.has_perm('base.can_translate_locale', l)
+        request.user.can_translate(project=project, locale=l)
         and (not request.user.profile.force_suggestions or approve)
     )
     translations = Translation.objects.filter(
@@ -786,14 +872,16 @@ def update_translation(request):
                     t.approved_user = user
                     t.approved_date = now
 
-                if request.user.is_authenticated():
-                    t.save()
+                t.save()
+
+                translations = Translation.for_locale_project_paths(l, project, paths)
 
                 return JsonResponse({
                     'type': 'updated',
                     'translation': t.serialize(),
                     'stats': TranslatedResource.objects.stats(project, paths, l),
-                    'authors': Translation.authors(l, project, paths).serialize(),
+                    'authors': translations.authors().serialize(),
+                    'counts_per_minute': translations.counts_per_minute(),
                 })
 
             # If added by non-privileged user, unfuzzy it
@@ -811,14 +899,16 @@ def update_translation(request):
                     t.approved_date = None
                     t.fuzzy = False
 
-                    if request.user.is_authenticated():
-                        t.save()
+                    t.save()
+
+                    translations = Translation.for_locale_project_paths(l, project, paths)
 
                     return JsonResponse({
                         'type': 'updated',
                         'translation': t.serialize(),
                         'stats': TranslatedResource.objects.stats(project, paths, l),
-                        'authors': Translation.authors(l, project, paths).serialize(),
+                        'authors': translations.authors().serialize(),
+                        'counts_per_minute': translations.counts_per_minute(),
                     })
 
                 return JsonResponse({
@@ -846,8 +936,7 @@ def update_translation(request):
                 t.approved_user = user
                 t.approved_date = now
 
-            if request.user.is_authenticated():
-                t.save()
+            t.save()
 
             # Return active (approved or latest) translation
             try:
@@ -855,11 +944,14 @@ def update_translation(request):
             except Translation.DoesNotExist:
                 active = translations.latest("date")
 
+            translations = Translation.for_locale_project_paths(l, project, paths)
+
             return JsonResponse({
                 'type': 'added',
                 'translation': active.serialize(),
                 'stats': TranslatedResource.objects.stats(project, paths, l),
-                'authors': Translation.authors(l, project, paths).serialize(),
+                'authors': translations.authors().serialize(),
+                'counts_per_minute': translations.counts_per_minute(),
             })
 
     # No translations saved yet
@@ -877,14 +969,16 @@ def update_translation(request):
             t.approved_user = user
             t.approved_date = now
 
-        if request.user.is_authenticated():
-            t.save()
+        t.save()
+
+        translations = Translation.for_locale_project_paths(l, project, paths)
 
         return JsonResponse({
             'type': 'saved',
             'translation': t.serialize(),
             'stats': TranslatedResource.objects.stats(project, paths, l),
-            'authors': Translation.authors(l, project, paths).serialize(),
+            'authors': translations.authors().serialize(),
+            'counts_per_minute': translations.counts_per_minute(),
         })
 
 
@@ -1157,7 +1251,9 @@ def upload(request):
         raise Http404
 
     locale = get_object_or_404(Locale, code=code)
-    if not request.user.has_perm('base.can_translate_locale', locale):
+    project = get_object_or_404(Project, slug=slug)
+
+    if not request.user.can_translate(project=project, locale=locale):
         return HttpResponseForbidden("Forbidden: You don't have permission to upload files")
 
     form = forms.UploadFileForm(request.POST, request.FILES)
@@ -1177,8 +1273,8 @@ def upload(request):
 @login_required(redirect_field_name='', login_url='/403')
 @require_POST
 @transaction.atomic
-def toggle_user_profile_attribute(request, email):
-    user = get_object_or_404(User, email=email)
+def toggle_user_profile_attribute(request, username):
+    user = get_object_or_404(User, username=username)
     if user != request.user:
         return HttpResponseForbidden("Forbidden: You don't have permission to edit this user")
 
@@ -1225,16 +1321,26 @@ def request_projects(request, locale):
         return HttpResponseBadRequest('Bad Request: Non-existent projects specified')
 
     projects = ''.join('- {} ({})\n'.format(p.name, p.slug) for p in project_list)
+    user = request.user
 
     if settings.PROJECT_MANAGERS[0] != '':
         EmailMessage(
-            'Project request for {locale} ({code})'.format(locale=locale.name, code=locale.code),
-            'Please add the following projects to {locale} ({code}):\n{projects}'.format(
-                locale=locale.name, code=locale.code, projects=projects
+            subject=u'Project request for {locale} ({code})'.format(locale=locale.name, code=locale.code),
+            body=u'''
+            Please add the following projects to {locale} ({code}):
+            {projects}
+            Requested by {user}, {user_role}:
+            {user_url}
+            '''.format(
+                locale=locale.name, code=locale.code, projects=projects,
+                user=user.display_name_and_email,
+                user_role=user.locale_role(locale),
+                user_url=request.build_absolute_uri(user.profile_url)
             ),
-            'pontoon@mozilla.com',
-            settings.PROJECT_MANAGERS,
-            reply_to=[request.user.email]).send()
+            from_email='pontoon@mozilla.com',
+            to=settings.PROJECT_MANAGERS,
+            cc=locale.managers_group.user_set.exclude(pk=user.pk).values_list('email', flat=True),
+            reply_to=[user.email]).send()
     else:
         raise ImproperlyConfigured("ADMIN not defined in settings. Email recipient unknown.")
 
@@ -1263,3 +1369,31 @@ def user_settings(request):
         'available_locales': available_locales,
         'selected_locales': selected_locales,
     })
+
+
+def heroku_setup(request):
+    """
+    Heroku doesn't allow us to set SITE_URL or Site during the build phase of an app.
+    Because of that we have to set everything up after build is done and app is
+    able to retrieve a domain.
+    """
+    app_host = request.get_host()
+    homepage_url = 'https://{}/'.format(app_host)
+    site_domain = Site.objects.get(pk=1).domain
+
+    if not os.environ.get('HEROKU_DEMO') or site_domain != 'example.com':
+        return redirect(homepage_url)
+
+    admin_email = os.environ.get('ADMIN_EMAIL')
+    admin_password = os.environ.get('ADMIN_PASSWORD')
+
+    User.objects.create_superuser(admin_email, admin_email, admin_password)
+    Site.objects.filter(pk=1).update(name=app_host, domain=app_host)
+
+    Project.objects.filter(slug='pontoon-intro').update(
+       url='https://{}/intro/'.format(app_host)
+    )
+
+    # Clear the cache to ensure that SITE_URL will be regenerated.
+    cache.delete(settings.APP_URL_KEY)
+    return redirect(homepage_url)

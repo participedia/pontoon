@@ -46,7 +46,7 @@ class RepositoryInline(admin.TabularInline):
     model = models.Repository
     extra = 0
     verbose_name_plural = 'Repositories'
-    fields = ('type', 'url', 'permalink_prefix', 'source_repo',)
+    fields = ('type', 'url', 'branch', 'permalink_prefix', 'last_synced_revisions', 'source_repo',)
 
 
 class SubpageInline(admin.TabularInline):
@@ -63,7 +63,7 @@ class ProjectAdmin(admin.ModelAdmin):
 
     fieldsets = (
         (None, {
-            'fields': ('name', 'slug', 'info_brief', 'disabled',),
+            'fields': ('name', 'slug', 'info_brief', 'langpack_url', 'disabled',),
         }),
         ('WEBSITE', {
             'fields': ('url', 'width', 'links'),

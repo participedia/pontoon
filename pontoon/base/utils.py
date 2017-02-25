@@ -2,13 +2,15 @@ import codecs
 import json
 import logging
 import os
+import pytz
 import re
 import requests
 import StringIO
 import tempfile
+import time
 import zipfile
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from django.db.models import Prefetch
 from django.http import HttpResponse, HttpResponseBadRequest
@@ -67,18 +69,22 @@ class SpacesPlaceable(base.Ph):
     parse = classmethod(general.regex_parse)
 
 
+class PythonFormatNamedPlaceable(base.Ph):
+    """Placeable handling named format string in python"""
+    istranslatable = False
+    regex = re.compile(r'%\([[\w\d\!\.,\[\]%:$<>\+\-= ]*\)[+|-|0\d+|#]?[\.\d+]?[s|d|e|f|g|o|x|c|%]', re.IGNORECASE)
+    parse = classmethod(general.regex_parse)
+
+
 class PythonFormatPlaceable(base.Ph):
     """Placeable handling new format strings in python"""
     istranslatable = False
-    regex = re.compile(r'\{[[\w\d\!\.,\[\]%:$<>\+\-= ]*\}', )
+    regex = re.compile(r'\{{?[[\w\d\!\.,\[\]%:$<>\+\-= ]*\}?}', )
     parse = classmethod(general.regex_parse)
 
 
 def mark_placeables(text):
-    """Wrap placeables to easily distinguish and manipulate them.
-
-    Source: http://bit.ly/1yQOC9B
-    """
+    """Wrap placeables to easily distinguish and manipulate them"""
 
     PARSERS = [
         NewlineEscapePlaceable.parse,
@@ -87,6 +93,7 @@ def mark_placeables(text):
         # The spaces placeable can match '\n  ' and mask the newline,
         # so it has to come later.
         SpacesPlaceable.parse,
+        PythonFormatNamedPlaceable.parse,
         PythonFormatPlaceable.parse,
         general.XMLTagPlaceable.parse,
         general.AltAttrPlaceable.parse,
@@ -128,6 +135,7 @@ def mark_placeables(text):
         'CamelCasePlaceable': "Camel case string",
         'XMLTagPlaceable': "XML tag",
         'OptionPlaceable': "Command line option",
+        'PythonFormatNamedPlaceable': "Python format string",
         'PythonFormatPlaceable': "Python format string"
     }
 
@@ -153,20 +161,18 @@ def mark_placeables(text):
 
             title = TITLES.get(class_name, "Unknown placeable")
 
-            spaces = '&nbsp;' * len(placeable)
-            if not placeable.startswith(' '):
-                spaces = placeable[0] + '&nbsp;' * (len(placeable) - 1)
             # Correctly render placeables in translation editor
             content = {
                 'TabEscapePlaceable': u'\\t',
                 'EscapePlaceable': u'\\',
-                'SpacesPlaceable': spaces,
                 'NewlinePlaceable': {
                     u'\r\n': u'\\r\\n<br/>\n',
                     u'\r': u'\\r<br/>\n',
                     u'\n': u'\\n<br/>\n',
                 }.get(placeable),
                 'PythonFormatPlaceable':
+                    placeable.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;'),
+                'PythonFormatNamedPlaceable':
                     placeable.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;'),
                 'XMLEntityPlaceable': placeable.replace('&', '&amp;'),
                 'XMLTagPlaceable':
@@ -360,9 +366,9 @@ def get_download_content(slug, code, part):
     locale = get_object_or_404(Locale, code__iexact=code)
 
     # Download a ZIP of all files if project has > 1 and < 10 resources
-    isZipable = 1 < project.resources.count() < 10
+    resources = Resource.objects.filter(project=project, translatedresources__locale=locale)
+    isZipable = 1 < len(resources) < 10
     if isZipable:
-        resources = project.resources.all()
         s = StringIO.StringIO()
         zf = zipfile.ZipFile(s, "w")
 
@@ -546,3 +552,24 @@ def latest_datetime(datetimes):
     min_datetime = timezone.make_aware(datetime.min)
     datetimes = map(lambda d: d or min_datetime, datetimes)
     return max(datetimes)
+
+
+def parse_time_interval(interval):
+    """
+    Return start and end time objects from time interval string n the format
+    %d%m%Y%H%M-%d%m%Y%H%M. Also, increase interval by one minute due to
+    truncation to a minute in Translation.counts_per_minute QuerySet.
+    """
+    def parse_timestamp(timestamp):
+        return timezone.make_aware(datetime.strptime(timestamp, '%Y%m%d%H%M'), timezone=pytz.UTC)
+
+    start, end = interval.split('-')
+
+    return parse_timestamp(start), parse_timestamp(end) + timedelta(minutes=1)
+
+
+def convert_to_unix_time(my_datetime):
+    """
+    Convert datetime object to UNIX time
+    """
+    return int(time.mktime(my_datetime.timetuple()) * 1000)

@@ -34,6 +34,14 @@ mark.placeable {
   padding: 0 2px;
 }
 
+mark.search {
+  color: #FFA10F;
+  font-weight: normal;
+  font-style: inherit;
+  background: #676054;
+  border-radius: 2px;
+}
+
 #source {
   display: none;
   height: 0;
@@ -59,10 +67,6 @@ mark.placeable {
   top: 60px;
   width: 100%;
   z-index: 14;
-}
-
-#project-load {
-  opacity: 0.9;
 }
 
 #project-load p {
@@ -167,23 +171,6 @@ body > header {
 
 body > header > .container {
   min-width: 800px;
-}
-
-#switch {
-  background: transparent;
-  border: none;
-  color: #FFFFFF;
-  display: none;
-  float: left;
-  height: 60px;
-  margin-left: 8px;
-  padding: 0; /* Needed to prevent jumping on click */
-  width: 27px;
-}
-
-#switch.opened {
-  -webkit-transform: rotate(90deg);
-  transform: rotate(90deg);
 }
 
 .select {
@@ -336,6 +323,16 @@ body > header .locale.select {
 .has-suggestions .status:before {
   color: #AAAAAA;
   content: "";
+}
+
+.time-range .status:before {
+  color: #AAAAAA;
+  content: "";
+}
+
+#filter .button.author .status:before {
+  color: #AAAAAA;
+  content: "";
 }
 
 .unchanged .status:before {
@@ -556,7 +553,6 @@ body > header aside p {
   background: #3F4752;
   border-right: 1px solid #5E6475;
   bottom: 0;
-  display: none;
   overflow: hidden;
   position: fixed;
   top: 60px;
@@ -567,7 +563,6 @@ body > header aside p {
 }
 
 #sidebar.advanced {
-  display: block;
   width: 700px;
 }
 
@@ -594,7 +589,6 @@ body > header aside p {
   left: 0;
   height: 100%;
   position: absolute;
-  transition: all 0.2s ease-out;
   width: 100%;
 }
 
@@ -620,6 +614,7 @@ body > header aside p {
 
 #entitylist .search-wrapper {
   margin-bottom: 0;
+  position: static;
 }
 
 #sidebar .search-wrapper .icon {
@@ -634,11 +629,15 @@ body > header aside p {
   color: #FFFFFF;
   font-size: 16px;
   font-weight: 300;
+  line-height: 23px;
   padding: 10px 35px 10px 43px;
   width: 100%;
 
   -moz-box-sizing: border-box;
   box-sizing: border-box;
+
+  /* Remove extra padding in Chrome search input */
+  -webkit-appearance: textfield;
 }
 
 #sidebar .search-wrapper input[type=search]:-moz-placeholder {
@@ -647,6 +646,11 @@ body > header aside p {
 
 #sidebar .search-wrapper input[type=search]:-webkit-input-placeholder {
   color: #AAAAAA;
+}
+
+/* Remove extra padding in Chrome search input */
+#sidebar .search-wrapper input[type=search]::-webkit-search-decoration {
+  -webkit-appearance: none;
 }
 
 #filter {
@@ -665,33 +669,24 @@ body > header aside p {
   color: #FFFFFF;
 }
 
-#filter.opened .button {
-  background-color: #272A2F;
-  border-bottom: 1px solid #525A65;
-  width: 100%;
-  z-index: 30;
-}
-
-#filter .button .title {
-  color: #AAAAAA;
-  display: none;
-  font-size: 16px;
-  left: 43px;
-  position: absolute;
-  top: 12px;
-}
-
-#filter.opened .button .title {
-  display: block;
-}
-
 #filter .menu {
   left: 0;
-  top: 43px;
-  width: 100%;
+  max-height: calc(100% - 44px);
+  overflow-y: auto;
+  padding: 0;
+  top: 44px;
+  width: 350px;
 
   -moz-box-sizing: border-box;
   box-sizing: border-box;
+}
+
+#filter .menu ul {
+  margin: 10px 12px;
+}
+
+#filter.fixed .menu ul {
+  margin-bottom: 54px;
 }
 
 #filter .menu li.horizontal-separator {
@@ -701,7 +696,7 @@ body > header aside p {
   cursor: default;
   font-size: 13px;
   height: auto;
-  padding-top: 10px;
+  padding-top: 20px;
   text-transform: uppercase;
 }
 
@@ -714,41 +709,307 @@ body > header aside p {
   position: relative;
 }
 
-#filter .menu li.authors {
+#filter .menu li.horizontal-separator button {
   background: transparent;
-  cursor: default;
-  margin-bottom: -4px;
-  padding-left: 0;
+  border: none;
+  color: #AAAAAA;
+  float: right;
+  font-weight: 300;
+  margin: -3px 4px 0 0;
+  padding: 1px 5px;
+  text-transform: uppercase;
 }
 
-#filter .menu li.authors ul {
-  max-height: 168px;
-  overflow-y: auto;
-  overflow-x: hidden;
+#filter .menu li.horizontal-separator button:hover {
+  color: #7BC876;
 }
 
-#filter .menu li.authors li {
+/* Remove extra padding in Firefox button */
+#filter .menu li.horizontal-separator button::-moz-focus-inner {
+  padding: 0;
+  border: 0;
+}
+
+#filter .menu li.horizontal-separator button .fa {
+  padding-right: 5px;
+}
+
+#filter .menu li.time-range {
+  padding: 4px 0;
+}
+
+#filter .menu li.time-range.editing {
+  cursor: auto;
+}
+
+#filter .menu li.time-range.editing.hover {
+  background: transparent;
+}
+
+#filter .menu li.time-range .title {
+  display: none;
+}
+
+#filter .menu li.time-range label {
+  color: #FFFFFF;
+  float: left;
+  font-size: 13px;
+}
+
+#filter .menu li.time-range label[for="from"] {
+  margin-left: 30px;
+}
+
+#filter .menu li.time-range label[for="to"] {
+  float: right;
+  margin-right: 4px;
+}
+
+#filter .menu li.time-range input {
+  background: transparent;
+  border: 1px solid transparent;
+  color: #AAAAAA;
+  cursor: pointer;
+  display: inline-block;
+  font-size: 13px;
+  font-weight: 300;
+  height: 17px;
+  margin-left: 5px;
+  outline: none;
+  vertical-align: baseline;
+  width: 109px;
+
+  -moz-box-sizing: border-box;
+  box-sizing: border-box;
+}
+
+#filter .menu li.time-range.editing input {
+  border-color: #525A65;
+}
+
+#filter .menu li.time-range.editing.hover input {
+  cursor: auto;
+}
+
+#filter .menu li.time-range input[disabled] {
+  pointer-events: none;
+}
+
+#filter .menu li.time-range input.error {
+  color: #FD5F60;
+}
+
+#filter .menu li.time-range input#to {
+  text-align: right;
+}
+
+#range-picker {
+  display: none;
+  height: 120px;
+  margin: 0 auto;
+  width: 306px;
+}
+
+#ui-datepicker-div {
+  background: #272A2F;
+  border: 1px solid #525A65;
+  border-radius: 0;
+  color: #AAAAAA;
+  font-family: inherit;
+  width: 218px;
+}
+
+#ui-datepicker-div .ui-datepicker-header {
+  background: transparent;
+  border: none;
+  color: #FFFFFF;
+  font-weight: 300;
+}
+
+.ui-datepicker .ui-datepicker-header .ui-corner-all {
+  background: none;
+  border-color: transparent;
+  cursor: pointer;
+}
+
+.ui-datepicker .ui-datepicker-header .ui-corner-all span {
+  background: none;
+  color: #AAAAAA;
+  padding-top: 2px;
+  text-indent: 0;
+  left: 12px;
+  top: 15px;
+
+  /* Font Awesome */
+  font: normal normal normal 14px/1 FontAwesome;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-font-smoothing: antialiased;
+}
+
+.ui-datepicker .ui-datepicker-header .ui-corner-all:hover span {
+  color: #7BC876;
+}
+
+.ui-datepicker .ui-datepicker-header .ui-corner-all.ui-datepicker-prev span:before {
+  content: "";
+}
+
+.ui-datepicker .ui-datepicker-header .ui-corner-all.ui-datepicker-next span:before {
+  content: "";
+}
+
+#ui-datepicker-div table {
+  margin-bottom: 20px;
+}
+
+#ui-datepicker-div th {
+  color: #7BC876;
+  font-weight: normal;
+  text-transform: uppercase;
+}
+
+#ui-datepicker-div td a,
+#ui-datepicker-div td.ui-state-disabled span {
+  background: transparent;
+  border-color: transparent;
+  color: #AAAAAA;
+  text-align: center;
+  width: 21px;
+}
+
+#ui-datepicker-div td a.ui-state-hover {
+  border-color: #525A65;
+}
+
+#ui-datepicker-div td a.ui-state-highlight,
+#ui-datepicker-div td.ui-datepicker-today span {
+  border-color: #FED271;
+}
+
+#ui-datepicker-div td a.ui-state-active {
+  border-color: #7BC876;
+  color: #7BC876;
+}
+
+#ui-datepicker-div td.ui-state-disabled {
+  opacity: 1;
+}
+
+#ui-datepicker-div td.ui-state-disabled span {
+  color: #555555;
+}
+
+#ui-datepicker-div .ui-widget-content {
+  border: none;
+}
+
+#filter .menu li.author {
+  height: 48px;
   padding-left: 4px;
   white-space: nowrap;
 }
 
-#filter .menu li.authors .author img {
+#filter .menu li.author figure {
+  height: 100%;
+}
+
+#filter .menu li.author img {
   vertical-align: top;
 }
 
-#filter .menu li.authors .author figcaption {
+#filter .menu li.author figcaption {
   display: inline-block;
-  padding: 2px 4px;
+  padding: 2px 0 2px 56px;
 }
 
-#filter .menu li.authors .author .name {
+#filter .menu li.author .name {
   color: #FFFFFF;
   font-size: 16px;
   padding-bottom: 4px;
 }
 
-#filter .menu li.authors .author .email {
-  color: #888888;
+#filter .menu li.author .role {
+  color: #AAAAAA;
+}
+
+#filter .menu li.author .sel {
+  position: absolute;
+}
+
+#filter .menu li.author .status {
+  display: none;
+  height: 100%;
+  left: 0;
+  margin: 0;
+  padding: 16px 0 0;
+  text-align: center;
+  top: 0;
+  width: 100%;
+  z-index: 1;
+
+  -moz-box-sizing: border-box;
+  box-sizing: border-box;
+}
+
+#filter .menu li.author .status:before {
+  color: #AAAAAA;
+}
+
+
+#filter .menu li.author.selected .status,
+#filter .menu li.author .sel:hover .status {
+  display: block;
+}
+
+#filter .menu li.author.selected img,
+#filter .menu li.author .sel:hover img {
+  opacity: 0.3;
+}
+
+#filter .toolbar {
+  background: #111111;
+  display: none;
+  border-top: 1px solid #5E6475;
+  line-height: 23px;
+  padding: 10px 12px;
+  text-transform: uppercase;
+  width: 100%;
+
+  -moz-box-sizing: border-box;
+  box-sizing: border-box;
+}
+
+#filter.fixed .toolbar {
+  position: fixed;
+  bottom: 0;
+  width: 350px;
+  z-index: 10;
+}
+
+#filter .clear-selection {
+  float: left;
+}
+
+#filter .apply-selected {
+  float: right;
+  text-align: right;
+}
+
+#filter .toolbar .fa {
+  vertical-align: baseline;
+}
+
+#filter .apply-selected:hover, #filter .apply-selected .applied-count {
+  color: #7BC876;
+}
+
+#filter .apply-selected .variant .plural,
+#filter .apply-selected .variant.plural .singular {
+  display: none;
+}
+
+#filter .apply-selected .variant.plural .plural {
+  display: inline;
 }
 
 #filter .menu li .status {
@@ -761,8 +1022,46 @@ body > header aside p {
   top: 2px;
 }
 
-#filter .menu li.unchanged .status {
+#filter .menu li.unchanged:not(.selected) .status {
   left: 3px;
+}
+
+#filter .menu li.unchanged:not(.selected) .status:hover {
+  left: 4px;
+}
+
+/* Make selection area bigger and fit the entire row for easier use */
+#filter .menu li .status {
+  margin: -3px -13px -3px -16px;
+  padding: 3px 13px 3px 16px;
+  font-size: 16px;
+}
+
+#filter .menu li:not(.selected):not(.all) .status:not(.unselectable):hover:before {
+  content: "";
+}
+
+#filter .menu li.selected .status:before {
+  content: "";
+}
+
+#filter .menu li .count {
+  background: #3F4752;
+  border-radius: 3px;
+  color: #CCCCCC;
+  padding: 0 5px;
+  position: absolute;
+  right: 4px;
+  top: 4px;
+}
+
+#filter .menu li.author .count {
+  top: 8px;
+}
+
+#filter .menu li.hover .count {
+  background: #4D5967;
+  color: #CCCCCC;
 }
 
 #entitylist > .wrapper {
@@ -845,6 +1144,7 @@ body > header aside p {
 #entitylist > .wrapper > ul > li.translated p span.source-string,
 #entitylist > .wrapper > ul > li.suggested p span.source-string,
 #entitylist > .wrapper > ul > li.fuzzy p span.source-string,
+#entitylist > .wrapper > ul > li.partial p span.source-string,
 #entitylist > .wrapper > ul > li p span.translation-string:not(:empty) {
   display: inline-block;
   width: 49%;
@@ -903,7 +1203,6 @@ body > header aside p {
   padding: 0;
   position: absolute;
   top: 0;
-  transition: all 0.2s ease-out;
   width: 100%;
 }
 
@@ -1093,10 +1392,13 @@ body > header aside p {
   right: 0;
   top: 2px;
   vertical-align: 0;
+  /* Bug 1312228: Stop tab loading animations when not needed to avoid high CPU usage */
+  display: none;
   visibility: hidden;
 }
 
 #editor nav li a.loading > span > .fa {
+  display: block;
   visibility: visible;
 }
 
@@ -1226,7 +1528,7 @@ body > header aside p {
 #editor #single > menu > .select .selector {
   color: #AAAAAA;
   font-size: 22px;
-  padding: 8px 5px;
+  padding: 9px 5px;
 }
 
 #editor #single > menu > #settings.select .selector {
@@ -1282,6 +1584,7 @@ body > header aside p {
   background: transparent;
   border: none;
   color: #EBEBEB;
+  height: 40px;
   padding: 10px 5px;
   text-transform: uppercase;
 }
@@ -1405,6 +1708,14 @@ p#sign-in-required > a#sidebar-signin {
   float: left;
 }
 
+#helpers > section ul li > header .toggle-diff {
+  margin-right: 6px;
+}
+
+#helpers > section ul li > header .toggle-diff.active {
+  color: #7BC876;
+}
+
 #helpers > section ul li > header .toolbar {
   float: right;
 }
@@ -1445,9 +1756,16 @@ p#sign-in-required > a#sidebar-signin {
 }
 
 #helpers > section ul li > header button.approve:hover:before,
-#helpers > section ul li.translated > header button.approve:before {
+#helpers > section ul li.translated > header button.approve:before,
+#helpers > section ul li.translated > header button.unapprove:before {
   color: #7BC876;
   content: "";
+}
+
+#helpers > section ul li > header button.approve:before,
+#helpers > section ul li > header button.unapprove:hover:before {
+   content: "";
+   color: #4FC4F6;
 }
 
 #helpers > section ul li > header button.delete:before {

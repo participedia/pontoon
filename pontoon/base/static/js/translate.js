@@ -4,37 +4,11 @@ var Pontoon = (function (my) {
 
     /*
      * UI helper methods
+     *
+     * type - if specified, function returns value for this filter type otherwise for all types
      */
-    getFilter: function() {
-      return $('#filter').data('current-filter') || 'all';
-    },
-
-
-    /*
-     * Set filter widget
-     */
-    setFilter: function (type) {
-      type = type || 'all';
-      var node = $('#filter .menu li[data-type="' + type + '"]');
-
-      // Validate filter
-      if (node.length === 0) {
-        type = 'all';
-        node = $('#filter .menu li[data-type="' + type + '"]');
-      }
-
-      var title = node.text(),
-          selectorType = type;
-
-      if (node.find('.email').length) {
-        title = node.find('.email').text();
-        selectorType = 'all';
-      }
-
-      $('#search').attr('placeholder', 'Search in ' + title);
-      $('#filter').data('current-filter', type)
-        .find('.title').html(title).end()
-        .find('.button').attr('class', 'button selector ' + selectorType);
+    getFilter: function(type) {
+      return type ? $('#filter').data('current-filter')[type] : $('#filter').data('current-filter');
     },
 
 
@@ -58,17 +32,18 @@ var Pontoon = (function (my) {
         (this.allEntitiesSelected ? ' selected' : '') +
         (entity.visible ? ' visible': '') +
         '" data-entry-pk="' + entity.pk + '">' +
-        '<span class="status fa' + (self.user.isTranslator ? '' : ' unselectable') + '"></span>' +
+        '<span class="status fa' + (self.user.canTranslate() ? '' : ' unselectable') + '"></span>' +
         '<p class="string-wrapper">' +
           '<span class="source-string">' + source_string + '</span>' +
           '<span class="translation-string" dir="auto" lang="' + self.locale.code + '">' +
-            self.doNotRender(entity.translation[0].string || '') +
+            self.markPlaceables(entity.translation[0].string || '') +
           '</span>' +
         '</p>' +
         '<span class="arrow fa fa-chevron-right fa-lg"></span>' +
         '</li>', self.app.win);
       li[0].entity = entity;
       entity.ui = li; /* HTML Element representing string in the main UI */
+      self.highlightQuery(li);
 
       // Hover editable entities on the page
       if (entity.body) {
@@ -158,6 +133,9 @@ var Pontoon = (function (my) {
               list.append('<li class="suggestion" title="Copy Into Translation (Tab)">' +
                 '<header>' + this.locale__name + '<span class="stress">' + this.locale__code + '</span></header>' +
                 '<p class="translation" dir="auto" lang="' + this.locale__code + '">' +
+                  self.markPlaceables(this.string) +
+                '</p>' +
+                '<p class="translation-clipboard">' +
                   self.doNotRender(this.string) +
                 '</p>' +
               '</li>');
@@ -231,6 +209,22 @@ var Pontoon = (function (my) {
     },
 
 
+    getApproveButtonTitle: function(translation) {
+      var approveButtonTitle = '';
+
+      if (translation.approved && translation.approved_user) {
+        return 'Approved by ' + translation.approved_user;
+      } else {
+        if (translation.unapproved_user) {
+          return 'Unapproved by ' + translation.unapproved_user;
+        } else {
+          return 'Not reviewed yet';
+        }
+      }
+
+    },
+
+
     /*
      * Get history of translations of given entity
      *
@@ -255,30 +249,35 @@ var Pontoon = (function (my) {
         },
         success: function(data) {
           if (data.length) {
-            $.each(data, function() {
+            $.each(data, function(i) {
               list.append(
                 '<li data-id="' + this.id + '" class="suggestion ' +
                 (this.approved ? 'translated' : this.fuzzy ? 'fuzzy' : 'suggested') +
                 '" title="Copy Into Translation (Tab)">' +
                   '<header class="clearfix' +
-                    ((self.user.isTranslator) ? ' translator' :
-                      ((self.user.email === this.email && !this.approved) ?
+                    ((self.user.canTranslate()) ? ' translator' :
+                      ((self.user.id === this.uid && !this.approved) ?
                         ' own' : '')) +
                     '">' +
                     '<div class="info">' +
-                      ((!this.email) ? this.user :
-                        '<a href="/contributors/' + this.email + '">' + this.user + '</a>') +
-                      '<time class="stress" datetime="' + this.date_iso + '">' + this.date + '</time>' +
+                      ((!this.uid) ? '<span>' + this.user + '</span>' :
+                        '<a href="/contributors/' + this.username + '" title="' + self.getApproveButtonTitle(this) + '">' + this.user + '</a>') +
+                      '<time class="stress" datetime="' + this.date_iso + '">' + this.date + ' UTC</time>' +
                     '</div>' +
                     '<menu class="toolbar">' +
-                      '<button class="approve fa" title="' +
-                      (this.approved ? this.approved_user ?
-                        'Approved by ' + this.approved_user : '' : 'Approve') +
-                      '"></button>' +
-                      ((self.user.email && (self.user.email === this.email) || self.user.isTranslator) ? '<button class="delete fa" title="Delete"></button>' : '') +
+                      ((i > 0) ? '<a href="#" class="toggle-diff" data-alternative-text="Hide diff" title="Show diff against the currently active translation">Show diff</a>' : '') +
+                      '<button class="' + (this.approved ? 'unapprove' : 'approve') + ' fa" title="' +
+                       (this.approved ? 'Unapprove' : 'Approve')  + '"></button>' +
+                      ((self.user.id && (self.user.id === this.uid) || self.user.canTranslate()) ? '<button class="delete fa" title="Delete"></button>' : '') +
                     '</menu>' +
                   '</header>' +
                   '<p class="translation" dir="auto" lang="' + self.locale.code + '">' +
+                    self.markPlaceables(this.translation) +
+                  '</p>' +
+                  '<p class="translation-diff" dir="auto" lang="' + self.locale.code + '">' +
+                    ((i > 0) ? self.diff(data[0].translation, this.translation) : self.markPlaceables(this.translation)) +
+                  '</p>' +
+                  '<p class="translation-clipboard">' +
                     self.doNotRender(this.translation) +
                   '</p>' +
                 '</li>');
@@ -385,9 +384,8 @@ var Pontoon = (function (my) {
      * Open translation editor in the main UI
      *
      * entity Entity
-     * inplace Was editor opened from in place?
      */
-    openEditor: function (entity, inplace) {
+    openEditor: function (entity) {
       var self = this;
       $('#editor')[0].entity = entity;
 
@@ -428,7 +426,9 @@ var Pontoon = (function (my) {
       }
 
       // Translation area (must be set before unsaved changes check)
-      $('#translation').val(entity.translation[0].string);
+      $('#translation')
+        .val(entity.translation[0].string)
+        .focus();
       $('.warning-overlay:visible .cancel').click();
 
       // Original string and plurals
@@ -477,11 +477,6 @@ var Pontoon = (function (my) {
         }
       }
 
-      // Focus
-      if (!inplace) {
-        $('#translation').focus();
-      }
-
       // Length
       var original = entity['original' + this.isPluralized()].length;
 
@@ -508,7 +503,7 @@ var Pontoon = (function (my) {
 
 
     /*
-     * Get entity status: 'translated', 'fuzzy', 'suggested', ''
+     * Get entity status: 'translated', 'fuzzy', 'suggested', 'partial', ''
      *
      * entity Entity
      */
@@ -516,7 +511,7 @@ var Pontoon = (function (my) {
       var translation = entity.translation,
           translated = fuzzy = suggested = 0;
 
-      for (i=0; i<translation.length; i++) {
+      for (var i=0; i<translation.length; i++) {
         if (entity.translation[i].approved) {
           translated++;
         }
@@ -535,6 +530,8 @@ var Pontoon = (function (my) {
         return 'fuzzy';
       } else if (i === suggested) {
         return 'suggested';
+      } else if (translated > 0 || fuzzy > 0 || suggested > 0) {
+        return 'partial';
       }
       return '';
     },
@@ -548,8 +545,8 @@ var Pontoon = (function (my) {
     checkUnsavedChanges: function (callback) {
       var entity = this.getEditorEntity();
 
-      // Ignore for anonymous users, for which we don't save traslations
-      if (!this.user.email || !entity) {
+      if (!entity) {
+        this.restoreInPlaceTranslation();
         return callback();
       }
 
@@ -562,6 +559,7 @@ var Pontoon = (function (my) {
         this.checkUnsavedChangesCallback = callback;
 
       } else {
+        this.restoreInPlaceTranslation();
         return callback();
       }
     },
@@ -659,16 +657,6 @@ var Pontoon = (function (my) {
       this.loadNextEntities();
     },
 
-
-    /*
-     * Filter list of entities by given type
-     */
-    filterEntities: function (type) {
-      this.setFilter(type);
-      this.searchEntities();
-    },
-
-
     /*
      * Render list of entities to translate
      */
@@ -744,13 +732,588 @@ var Pontoon = (function (my) {
     },
 
 
+    /*
+     * Start/Stop costumizing time range
+     */
+    toggleRangeEditing: function() {
+      var editing = $('.for-time-range .edit').is('.editing');
+      $('#range-picker').toggle(!editing);
+
+      $('#filter .time-range')
+        .toggleClass('editing', !editing)
+        .find('input').each(function() {
+          $(this).prop('disabled', editing);
+        });
+
+      var $toggle = $('#filter .horizontal-separator .edit'),
+          newTitle = $toggle.data('alternative'),
+          oldTitle = $toggle.html();
+
+      $toggle
+        .html(newTitle)
+        .data('alternative', oldTitle)
+        .toggleClass('editing');
+
+      this.positionFilterToolbar();
+    },
+
+
+    /*
+     * Reverse day and month order
+     */
+    reverseDayMonth: function(date) {
+      var split = date.split('/');
+      return split[1] + '/' + split[0] + '/' + split[2];
+    },
+
+
+    /*
+     * Convert server time to local format
+     */
+    server2local: function(d) {
+      return ('0' + d.getDate()).slice(-2) + '/' +
+      ('0' + (d.getMonth() + 1)).slice(-2) + '/' +
+      d.getFullYear() + " " +
+      ('0' + d.getHours()).slice(-2) + ":" +
+      ('0' + d.getMinutes()).slice(-2);
+    },
+
+
+    /*
+     * Convert local time to to server format and time zone (UTC)
+     */
+    local2server: function(local) {
+      var reverse = this.reverseDayMonth(local);
+
+      try {
+        var utc = new Date(reverse).toISOString();
+        return utc.replace(/-/gi, '').replace(/T/gi, '').replace(/:/gi, '').substring(0, 12);
+      } catch (e) {}
+    },
+
+
+    /*
+     * Convert local time to chart format (Epoch) and time zone (UTC)
+     */
+    local2chart: function(local) {
+      var reverse = this.reverseDayMonth(local);
+      return new Date(reverse).getTime();
+    },
+
+
+    /*
+     * Initialize Time Range selector chart
+     */
+    updateRangePicker: function() {
+      var self = this,
+          counts = self.countsPerMinute;
+
+      $('#filter').find('.time-range, .for-time-range').toggle(counts.length > 0);
+
+      if (counts.length === 0) {
+        return;
+      }
+
+      // Set default input values and limits
+      var from = counts[0][0],
+          to = counts[counts.length - 1][0];
+
+      $('#from').val(Highcharts.dateFormat('%d/%m/%Y %H:%M', from));
+      $('#to').val(Highcharts.dateFormat('%d/%m/%Y %H:%M', to));
+
+      // Render range selector
+      Highcharts.setOptions({
+        global: {
+            useUTC: false
+        },
+        lang:{
+          rangeSelectorZoom: ''
+        }
+      });
+
+      $('#range-picker').highcharts('StockChart', {
+        credits: {
+          enabled: false
+        },
+
+        title: {
+          enabled: false
+        },
+
+        scrollbar : {
+          enabled : false
+        },
+
+        tooltip: {
+          enabled: false
+        },
+
+        chart: {
+          backgroundColor: 'transparent',
+          marginLeft: 5,
+          marginRight: 4,
+          spacingBottom: 30,
+          spacingTop: 0,
+          style: {
+            fontFamily: 'inherit'
+          }
+        },
+
+        xAxis: {
+          lineWidth: 0,
+          tickLength : 0,
+          labels: {
+            enabled: false
+          },
+          events: {
+            setExtremes: function (e) {
+              $('#from').val(Highcharts.dateFormat('%d/%m/%Y %H:%M', e.min));
+              $('#to').val(Highcharts.dateFormat('%d/%m/%Y %H:%M', e.max));
+            }
+          }
+        },
+
+        yAxis: {
+          type: 'logarithmic',
+          minorTickInterval: 0,
+          gridLineWidth: 0,
+          labels: {
+            enabled: false
+          }
+        },
+
+        rangeSelector: {
+          selected: 0,
+          buttons: [{
+            type: 'all',
+            text: 'All'
+          }, {
+            type: 'day',
+            count: 30,
+            text: '30 days'
+          }, {
+            type: 'day',
+            count: 7,
+            text: '7 days'
+          }, {
+            type: 'day',
+            count: 1,
+            text: '24 h'
+          }, {
+            type: 'minute',
+            count: 60,
+            text: '60 min'
+          }],
+          buttonPosition: {
+            x: -2,
+            y: 95
+          },
+          buttonTheme: {
+            fill: 'none',
+            stroke: 'none',
+            width: null,
+            style: {
+              color: '#FFFFFF',
+              fontSize: 11,
+              fontWeight: 300,
+              textTransform: 'uppercase',
+            },
+            states: {
+              hover: {
+                fill: 'none',
+                style: {
+                  color: '#7BC876'
+                }
+              },
+              select: {
+                fill: 'none',
+                style: {
+                  color: '#7BC876',
+                  fontWeight: 300,
+                }
+              },
+              disabled: {
+                style: {
+                  color: '#888888',
+                  cursor: 'default'
+                }
+              }
+            }
+          }
+        },
+
+        navigator: {
+          height: 80,
+          maskFill: 'rgba(77, 89, 103, 0.2)',
+          outlineColor: "#4D5967",
+          handles: {
+            backgroundColor: "#4D5967",
+            borderColor: "#272A2F"
+          },
+          series: {
+            type: "column",
+            color: '#7BC876'
+          },
+          xAxis: {
+            lineWidth: 1,
+            lineColor: "#4D5967",
+            gridLineWidth: 0,
+            labels: {
+              enabled: false
+            }
+          }
+        },
+
+        series: [{
+          type: 'column',
+            data: counts
+        }]
+      });
+    },
+
+
+    /*
+     * Return empty filter object
+     */
+    getEmptyFilterObject: function() {
+      return {
+        status: [],
+        extra: [],
+        time: '',
+        author: []
+      };
+    },
+
+
+    /*
+     * Make sure filter toolbar is always visible
+     */
+    positionFilterToolbar: function() {
+      var menu = $('#filter .menu'),
+          scrollbarVisible = menu[0].scrollHeight > (menu.height()),
+          toolbarVisible = $('#filter .selected').length > 0;
+
+      $('#filter').toggleClass('fixed', scrollbarVisible && toolbarVisible);
+    },
+
+
+    /*
+     * Set filter value to HTML and mark selected filters
+     *
+     * filter: object with properties for each filter type
+     */
+    updateFilterUI: function(filter) {
+      filter = filter || this.getFilter();
+
+      var placeholder = [],
+          selectorType = 'all',
+          self = this;
+
+      $('#filter').data('current-filter', filter);
+
+      // Reset all filters
+      this.clearSelectedFilters();
+
+      function markSelectedFilters(type) {
+        for (var i=0, l=filter[type].length; i < l; i++) {
+          var node = $('#filter .menu [data-type="' + filter[type][i] + '"]'),
+              title = node.find('.title').text();
+
+          node.addClass('selected');
+
+          if (type === 'author') {
+            title = node.find('.name').text() + "'s translations";
+          }
+          placeholder.push(title);
+        }
+      }
+
+      for (var type in filter) {
+        if (filter[type] && filter[type] !== []) {
+          if (type === 'status' || type === 'extra' || type === 'author') {
+            markSelectedFilters(type);
+
+          } else if (type === 'time') {
+            var node = $('#filter .menu [data-type="time-range"]');
+            node.addClass('selected');
+            placeholder.push(node.find('.title').text());
+          }
+        }
+      }
+
+      // Special case: Untranslated filter is a union of missing, fuzzy, and suggested
+      if (self.untranslatedFilterApplied(filter.status)) {
+        $('#filter .menu [data-type="untranslated"]').addClass('selected');
+      }
+
+      var selectedCount = $('#filter .selected').length;
+
+      // If only one filter selected, use it's own icon in the filter selector
+      if (selectedCount === 1) {
+        selectorType = $('#filter .selected').data('type');
+        if (selectorType.indexOf('@') !== -1) {
+          selectorType = 'author';
+        }
+      }
+
+      // Update placeholder and filter selector icon
+      $('#search').attr('placeholder', 'Search in ' + (placeholder.join(', ') || 'All'));
+      $('#filter .button').attr('class', 'button selector ' + selectorType);
+
+      // Update count (N) in Apply N filters button
+      $('#filter .toolbar')
+        .toggle(selectedCount > 0)
+        .find('.variant').toggleClass('plural', selectedCount > 1).end()
+        .find('.applied-count').html(selectedCount);
+
+      this.positionFilterToolbar();
+    },
+
+
+    /*
+     * Validate Time range input field
+     */
+    validateTimeRangeInput: function() {
+      var from = this.local2server($('#from').val());
+          to = this.local2server($('#to').val());
+
+      if (from && to) {
+        return from + '-' + to;
+      } else {
+        $('#from').toggleClass('error', !from);
+        $('#to').toggleClass('error', !to);
+        return '';
+      }
+    },
+
+
+    /*
+     * Validate Time range URL parameter
+     */
+    validateTimeRangeURL: function (filter) {
+      var time = filter.time;
+
+      if (/^[0-9]{12}-[0-9]{12}$/.test(time)) {
+        // Populate from/to inputs (needed if filter specified in URL)
+        var from = new Date(
+          time.substring(0, 4) + '/' +
+          time.substring(4, 6) + '/' +
+          time.substring(6, 8) + ' ' +
+          time.substring(8, 10) + ':' +
+          time.substring(10, 12) + ' UTC'
+        );
+
+        var to = new Date(
+          time.substring(13, 17) + '/' +
+          time.substring(17, 19) + '/' +
+          time.substring(19, 21) + ' ' +
+          time.substring(21, 23) + ':' +
+          time.substring(23, 25) + ' UTC'
+        );
+
+        if (from != 'Invalid Date' && to != 'Invalid Date') {
+          $('#from').val(this.server2local(from));
+          $('#to').val(this.server2local(to));
+
+          // Firefox gracefully parses dates, arithmetically converting to meaningful values,
+          // so we need to reset the filter in the URL.
+          filter.time = this.local2server($('#from').val()) + '-' + this.local2server($('#to').val());
+
+        } else {
+          this.resetTimeRange();
+        }
+      }
+    },
+
+
+    /*
+     * Clear selected filters
+     */
+    clearSelectedFilters: function() {
+      $('#filter .selected').removeClass('selected');
+    },
+
+
+    /*
+     * Apply selected filters
+     */
+    applySelectedFilters: function() {
+      this.searchEntities();
+      $('#filter .selector').click();
+    },
+
+
+    /*
+     * Return an array of untranslated filter statuses
+     */
+    getUntranslatedFilters: function() {
+      return ['missing', 'fuzzy', 'suggested'];
+    },
+
+
+    /*
+     * Apply untranslated filter
+     */
+    applyUntranslatedFilter: function(status) {
+      var values = this.getUntranslatedFilters();
+      for (var i=0, l=values.length; i<l; i++) {
+        if (status.indexOf(values[i]) === -1) {
+          status.push(values[i]);
+        }
+      }
+    },
+
+
+    /*
+     * Check if untranslated filter applied
+     */
+    untranslatedFilterApplied: function(status) {
+      var values = this.getUntranslatedFilters();
+      for (var i=0, l=values.length; i<l; i++) {
+        if (status.indexOf(values[i]) === -1) {
+          return false;
+        }
+      }
+      return true;
+    },
+
+
     attachEntityListHandlers: function() {
       var self = this;
 
-      // Filter entities
-      $('#filter').on('click', 'li[data-type]', function() {
-        var type = $(this).data('type');
-        self.filterEntities(type);
+      // Filter entities by multiple filters
+      $('#filter').on('click', 'li[data-type]:not(".editing"):not(".all") .status', function(e) {
+        e.stopPropagation();
+
+        var el = $(this).parents('li'),
+            value = el.data('type'),
+            filter = self.getFilter(),
+            num = -1;
+
+        function updateFilterValue(type) {
+          num = filter[type].indexOf(value);
+          if (num === -1) {
+            filter[type].push(value);
+          } else {
+            filter[type].splice(num, 1);
+          }
+        }
+
+        if (el.hasClass('time-range')) {
+          filter.time = el.hasClass('selected') ? '' : self.validateTimeRangeInput();
+
+        } else if (el.hasClass('author')) {
+          updateFilterValue('author');
+
+        } else if (el.hasClass('untranslated') || el.hasClass('unchanged') || el.hasClass('has-suggestions')) {
+          // Special case: Untranslated filter is a union of missing, fuzzy, and suggested
+          if (value === 'untranslated') {
+            if (self.untranslatedFilterApplied(filter.status)) {
+              filter.status = filter.status.indexOf('translated') !== -1 ? ['translated'] : [];
+            } else {
+              self.applyUntranslatedFilter(filter.status);
+            }
+
+          } else {
+            updateFilterValue('extra');
+          }
+
+        } else {
+          updateFilterValue('status');
+        }
+
+        self.updateFilterUI();
+      });
+
+      // Filter entities by a single filter
+      $('#filter').on('click', 'li[data-type]:not(".editing")', function(e) {
+        var el = $(this),
+            value = el.data('type'),
+            filter = self.getEmptyFilterObject();
+
+        if (el.hasClass('time-range')) {
+          filter.time = self.validateTimeRangeInput();
+          if (!filter.time) {
+            return;
+          }
+
+        } else if (el.hasClass('author')) {
+          filter.author.push(value);
+
+        } else if (el.hasClass('untranslated') || el.hasClass('unchanged') || el.hasClass('has-suggestions')) {
+          if (value === 'untranslated') {
+            self.applyUntranslatedFilter(filter.status);
+
+          } else {
+            filter.extra.push(value);
+          }
+
+        } else if (!el.hasClass('all')) {
+          filter.status.push(value);
+        }
+
+        self.updateFilterUI(filter);
+        self.applySelectedFilters();
+      });
+
+      // Switch between relative and fixed filter toolbar position on window resize
+      $(window).resize(function () {
+        self.positionFilterToolbar();
+      });
+
+      // Clear selected filters
+      $('#filter .clear-selected').click(function(e) {
+        e.preventDefault();
+
+        self.updateFilterUI(self.getEmptyFilterObject());
+        $('#filter .toolbar').hide();
+      });
+
+      // Apply selected filters
+      $('#filter .apply-selected').click(function(e) {
+        e.preventDefault();
+
+        self.applySelectedFilters();
+      });
+
+      // Time range editing toggle
+      $('#filter .horizontal-separator .edit').click(function(e) {
+        self.toggleRangeEditing();
+      });
+
+      // Initialize date & time range picker
+      $('#filter .time-range').on('focusin', 'input:not(".hasDatepicker")', function(e) {
+        $.timepicker.datetimeRange($('#from'), $('#to'), {
+          showTime: false,
+          showHour: false,
+          showMinute: false,
+          showButtonPanel: false,
+          nextText: '',
+          prevText: '',
+          dateFormat: 'dd/mm/yy',
+          maxDate: new Date()
+        });
+      });
+
+      // Clear error styling on value change
+      $('#filter .time-range input').on('input propertychange change', function() {
+        var from = self.local2chart($('#from').val()),
+            to = self.local2chart($('#to').val());
+
+        $('#range-picker').highcharts().xAxis[0].setExtremes(from, to);
+        $(this).removeClass('error');
+      });
+
+      // Do not close the filter menu if clicked inside the menu
+      $('#filter').on('click', '.menu', function (e) {
+        e.stopPropagation();
+      });
+
+      // Do not close the filter menu when navigating calendar
+      $('html').on('click', function (e) {
+        if ($(e.target).is('#ui-datepicker-div') || $(e.target).is('.ui-icon') || $(e.target).parents('#ui-datepicker-div').length) {
+          $('#filter .selector').click();
+        }
       });
 
       // Trigger event with a delay (e.g. to prevent UI blocking)
@@ -882,7 +1445,38 @@ var Pontoon = (function (my) {
           return;
       }
 
-      self.updateOnServer(entity, source, false, true);
+      self.updateOnServer(entity, source, true);
+    },
+
+
+    /*
+     * Restore in-place translation to previous state or original
+     * We need to do this to avoid setting empty string
+     */
+    restoreInPlaceTranslation: function () {
+      var entity = this.getEditorEntity();
+
+      if (entity) {
+        var translation = entity.translation[0].string || entity.original;
+        this.updateInPlaceTranslation(translation);
+      }
+    },
+
+
+    /*
+     * Update in-place translation if applicable
+     */
+    updateInPlaceTranslation: function (translation) {
+      var entity = this.getEditorEntity(),
+          pluralForm = this.getPluralForm(true),
+          translation = translation || $('#translation').val();
+
+      if (entity.body && pluralForm === 0 && (this.user.canTranslate() || !entity.translation[pluralForm].approved)) {
+        this.postMessage("SAVE", {
+          translation: translation,
+          id: entity.id
+        });
+      }
     },
 
 
@@ -935,6 +1529,11 @@ var Pontoon = (function (my) {
       $('#original').on('click', '.placeable', function (e) {
         e.preventDefault();
 
+        // Ignore for anonymous users
+        if (!self.user.id) {
+          return;
+        }
+
         var textarea = $('#translation'),
             selectionStart = textarea.prop('selectionStart'),
             selectionEnd = textarea.prop('selectionEnd'),
@@ -945,6 +1544,8 @@ var Pontoon = (function (my) {
 
         textarea.val(after).focus();
         textarea[0].setSelectionRange(cursorPos, cursorPos);
+        self.updateCurrentTranslationLength();
+        self.updateInPlaceTranslation();
       });
 
       function switchToPluralForm(tab) {
@@ -1070,6 +1671,7 @@ var Pontoon = (function (my) {
       // Update length (keydown is triggered too early)
       }).unbind("input propertychange").bind("input propertychange", function (e) {
         self.updateCurrentTranslationLength();
+        self.updateInPlaceTranslation();
         $('.warning-overlay:visible .cancel').click();
       });
 
@@ -1087,6 +1689,7 @@ var Pontoon = (function (my) {
       $('#leave-anyway').click(function() {
         var callback = self.checkUnsavedChangesCallback;
         if (callback) {
+          self.restoreInPlaceTranslation(); // Before callback, so that entity is available!
           callback();
           $('#unsaved').hide();
           $('#translation').val(self.cachedTranslation);
@@ -1104,7 +1707,7 @@ var Pontoon = (function (my) {
         $('#translation').val(source).focus();
         self.moveCursorToBeginning();
         self.updateCurrentTranslationLength();
-        self.updateCachedTranslation();
+        self.updateInPlaceTranslation();
       });
 
       // Clear translation area
@@ -1114,7 +1717,7 @@ var Pontoon = (function (my) {
         $('#translation').val('').focus();
         self.moveCursorToBeginning();
         self.updateCurrentTranslationLength();
-        self.updateCachedTranslation();
+        self.updateInPlaceTranslation();
       });
 
       // Save translation
@@ -1146,37 +1749,82 @@ var Pontoon = (function (my) {
           return;
         }
 
-        var translation = $(this).find('.translation').text(),
-            source = translation;
+        // Ignore for anonymous users
+        if (!self.user.id) {
+          return;
+        }
+
+        // Ignore if selecting text
+        if (window.getSelection().toString()) {
+          return;
+        }
+
+        var source = $(this).find('.translation-clipboard').text();
 
         $('#translation').val(source).focus();
         self.moveCursorToBeginning();
         self.updateCurrentTranslationLength();
-        self.updateCachedTranslation();
+        self.updateInPlaceTranslation();
 
         $('.warning-overlay:visible .cancel').click();
       });
 
       // Approve and delete translations
-      $('#helpers .history').on('click', 'menu button', function (e) {
+      $('#helpers .history').on('click', 'menu .approve', function (e) {
+        $(this).parents('li').click();
+
+        var entity = self.getEditorEntity(),
+            translation = $('#translation').val();
+
+        // Mark that user approved translation instead of submitting it
+        self.approvedNotSubmitted = true;
+        self.updateOnServer(entity, translation, true);
+      });
+
+      $('#helpers .history').on('click', 'menu .unapprove', function (e) {
+         var button = $(this),
+             translationId = parseInt($(this).parents('li').data('id'));
+
+         $.post('/unapprove-translation/', {
+            csrfmiddlewaretoken: $('#server').data('csrf'),
+            translation: translationId,
+            paths: self.getPartPaths(self.currentPart)
+         }).then(function(data) {
+           var entity = self.getEditorEntity(),
+               pf = self.getPluralForm(true);
+
+           self.stats = data.stats;
+           self.updateProgress(entity);
+
+           self.updateTranslation(entity, pf, data.translation);
+
+           $('#translation').val(data.translation.string).focus();
+           self.updateCachedTranslation();
+           self.updateCurrentTranslationLength();
+
+           if (entity.body && pf === 0) {
+             self.postMessage("SAVE", {
+               translation: data.translation.string,
+               id: entity.id
+             });
+           }
+
+           button.removeClass('unapprove').addClass('approve');
+           button.prop('title', 'Approve');
+           button.parents('li.translated').removeClass('translated').addClass('suggested');
+           button.parents('li').find('.info a').prop('title', self.getApproveButtonTitle({
+             approved: false,
+             unapproved_user: self.user.display_name
+           }));
+
+           self.endLoader('Translation has been unapproved.');
+         }, function() {
+           self.endLoader("Couldn't unapprove this translation.");
+         });
+      });
+
+      $('#helpers .history').on('click', 'menu .delete', function (e) {
         var button = $(this);
-        if (button.is('.approve') && button.parents('li.translated').length > 0) {
-          return;
-        }
-
-        // Approve
-        if (button.is('.approve')) {
-          button.parents('li').click();
-
-          var entity = self.getEditorEntity(),
-              translation = $('#translation').val();
-
-          // Mark that user approved translation instead of submitting it
-          self.approvedNotSubmitted = true;
-          self.updateOnServer(entity, translation, false, true);
-          return;
-        }
-
         // Delete
         $.ajax({
           url: '/delete-translation/',
@@ -1191,11 +1839,11 @@ var Pontoon = (function (my) {
                 next = item.next(),
                 index = item.index(),
                 entity = self.getEditorEntity(),
-                pluralForm = self.getPluralForm(true),
-                translation = entity.translation[pluralForm];
+                pluralForm = self.getPluralForm(true);
 
             self.stats = data.stats;
             self.authors = data.authors;
+            self.countsPerMinute = data.counts_per_minute;
 
             item
               .addClass('delete')
@@ -1212,10 +1860,13 @@ var Pontoon = (function (my) {
                     var newTranslation = $('#translation').val();
 
                     if (entity.body && pluralForm === 0) {
-                      self.postMessage("SAVE", newTranslation);
+                      self.postMessage("SAVE", {
+                        translation: newTranslation,
+                        id: entity.id
+                      });
                     }
 
-                    self.updateTranslation(entity, translation, {
+                    self.updateTranslation(entity, pluralForm, {
                       pk: next.data('id'),
                       string: newTranslation,
                       approved: false,
@@ -1227,16 +1878,17 @@ var Pontoon = (function (my) {
                     $('#translation').val('').focus();
 
                     if (entity.body && pluralForm === 0) {
-                      self.postMessage("DELETE");
-
-                    } else {
-                      self.updateTranslation(entity, translation, {
-                        pk: null,
-                        string: null,
-                        approved: false,
-                        fuzzy: false
+                      self.postMessage("DELETE", {
+                        id: entity.id
                       });
                     }
+
+                    self.updateTranslation(entity, pluralForm, {
+                      pk: null,
+                      string: null,
+                      approved: false,
+                      fuzzy: false
+                    });
 
                     $('#helpers .history ul')
                       .append('<li class="disabled">' +
@@ -1248,13 +1900,31 @@ var Pontoon = (function (my) {
                   self.updateCurrentTranslationLength();
                   self.updateCachedTranslation();
                   self.updateAuthors();
+                  self.updateRangePicker();
+                  self.updateFilterUI();
                 }
+
+                // Update number of history entities
+                var count = $('#helpers .history .suggestion').length;
+                $('#helpers a[href="#history"] .count')
+                  .toggle(count > 0)
+                  .html(count);
               });
           },
           error: function() {
             self.endLoader('Oops, something went wrong.', 'error');
           }
         });
+      });
+
+      // Toggle suggestion diff
+      $('#helpers .history').on('click', '.toggle-diff', function (e) {
+        e.preventDefault();
+
+        var oldText = $(this).html();
+        $(this).html($(this).data('alternative-text'));
+        $(this).data('alternative-text', oldText);
+        $(this).parents('li').find('.translation, .translation-diff').toggle();
       });
     },
 
@@ -1370,6 +2040,9 @@ var Pontoon = (function (my) {
                     self.stats = entitiesData.stats;
                     self.authors = entitiesData.authors;
                     self.updateAuthors();
+                    self.countsPerMinute = entitiesData.counts_per_minute;
+                    self.updateRangePicker();
+                    self.updateFilterUI();
 
                     entitiesMap = {};
                     $.each(entitiesData.entities, function() {
@@ -1385,8 +2058,8 @@ var Pontoon = (function (my) {
                         self.updateEntityUI(entity);
 
                         if (entity.body) {
-                          if ($(button).is('#delete-all')) {
-                            self.postMessage("BATCH-DELETE", {
+                          if ($(button).is('#delete-all') && !entity.translation[0].pk) {
+                            self.postMessage("DELETE", {
                               id: entity.id
                             });
                           } else {
@@ -1440,6 +2113,8 @@ var Pontoon = (function (my) {
 
     /*
      * Update progress indicator and value
+     *
+     * entity If provided, also update the parts menu
      */
     updateProgress: function (entity) {
       var self = this,
@@ -1494,6 +2169,14 @@ var Pontoon = (function (my) {
           .find('.fuzzy p').html(fuzzy).end()
           .find('.missing p').html(missing);
 
+      // Update filter
+      $('#filter .menu')
+          .find('.all .count').html(total).end()
+          .find('.translated .count').html(translated).end()
+          .find('.suggested .count').html(suggested).end()
+          .find('.fuzzy .count').html(fuzzy).end()
+          .find('.missing .count').html(missing);
+
       // Update parts menu
       if (entity && total) {
         var paths = [],
@@ -1524,10 +2207,10 @@ var Pontoon = (function (my) {
           translation = entity.translation[0].string;
 
       entity.ui
-        .removeClass('translated suggested fuzzy')
+        .removeClass('translated suggested fuzzy partial')
         .addClass(status)
         .find('.translation-string')
-          .html(self.doNotRender(translation || ''));
+          .html(self.markPlaceables(translation || ''));
 
       self.updateProgress(entity);
     },
@@ -1537,12 +2220,12 @@ var Pontoon = (function (my) {
      * Update translation object with provided data
      *
      * entity Entity to update Translation for
-     * translation Translation to update
+     * pluralForm Translation plural form to update
      * data Data to update translation with
      */
-    updateTranslation: function (entity, translation, data) {
+    updateTranslation: function (entity, pluralForm, data) {
       for (var key in data) {
-        translation[key] = data[key];
+        entity.translation[pluralForm][key] = data[key];
       }
 
       this.updateEntityUI(entity);
@@ -1561,7 +2244,7 @@ var Pontoon = (function (my) {
               value = localStorage[key];
           if (value) {
             value = JSON.parse(localStorage[key]);
-            this.updateOnServer(entity, value.translation, false, false);
+            this.updateOnServer(entity, value.translation, false);
             delete localStorage[key];
           }
         }
@@ -1614,10 +2297,9 @@ var Pontoon = (function (my) {
      *
      * entity Entity
      * translation Translation
-     * inplace Was translation submitted in place?
      * syncLocalStorage Synchronize translations in localStorage with the server
      */
-    updateOnServer: function (entity, translation, inplace, syncLocalStorage) {
+    updateOnServer: function (entity, translation, syncLocalStorage) {
       var self = this,
           pluralForm = self.getPluralForm();
 
@@ -1648,13 +2330,10 @@ var Pontoon = (function (my) {
       function renderTranslation(data) {
         self.stats = data.stats;
         self.authors = data.authors;
+        self.countsPerMinute = data.counts_per_minute;
 
         if (data.type) {
-          if (self.user.email) {
-            self.endLoader('Translation ' + data.type);
-          } else {
-            self.endLoader('Sign in to save translations');
-          }
+          self.endLoader('Translation ' + data.type);
 
           if (self.approvedNotSubmitted) {
             $('#helpers .history [data-id="' + data.translation.pk + '"] button.approve')
@@ -1664,12 +2343,14 @@ var Pontoon = (function (my) {
 
           var pf = self.getPluralForm(true);
           self.cachedTranslation = translation;
-          self.updateTranslation(entity, entity.translation[pf], data.translation);
+          self.updateTranslation(entity, pf, data.translation);
           self.updateAuthors();
+          self.updateInPlaceTranslation(data.translation.string);
+          self.updateRangePicker();
+          self.updateFilterUI();
 
           // Update translation, including in place if possible
-          if (!inplace && entity.body && (self.user.isTranslator ||
-              !entity.translation[pf].approved)) {
+          if (entity.body && (self.user.canTranslate() || !entity.translation[pf].approved)) {
             self.postMessage("SAVE", {
               translation: translation,
               id: entity.id
@@ -1704,7 +2385,11 @@ var Pontoon = (function (my) {
         submittedPluralForm = 0;
       }
 
-      $.ajax({
+      if (self.XHRupdateOnServer) {
+        self.XHRupdateOnServer.abort();
+      }
+
+      self.XHRupdateOnServer = $.ajax({
         url: '/update/',
         type: 'POST',
         data: {
@@ -1714,7 +2399,7 @@ var Pontoon = (function (my) {
           translation: translation,
           plural_form: submittedPluralForm,
           original: entity['original' + self.isPluralized()],
-          ignore_check: inplace || $('#quality').is(':visible') || !syncLocalStorage,
+          ignore_check: $('#quality').is(':visible') || !syncLocalStorage,
           approve: self.approvedNotSubmitted || false,
           paths: self.getPartPaths(self.currentPart)
         },
@@ -1726,6 +2411,11 @@ var Pontoon = (function (my) {
           }
         },
         error: function(error) {
+          // Skip if other request in progress
+          if (self.XHRupdateOnServer && self.XHRupdateOnServer.statusText === 'abort') {
+            return;
+          }
+
           if (error.status === 0) {
             // No connection -> use offline mode
             self.addToLocalStorage(entity, translation);
@@ -1733,7 +2423,7 @@ var Pontoon = (function (my) {
             var data = {
               type: "added",
               translation: {
-                approved: self.user.isTranslator,
+                approved: self.user.canTranslate(),
                 fuzzy: false,
                 string: translation
               }
@@ -1791,6 +2481,18 @@ var Pontoon = (function (my) {
 
 
     /*
+     * Mark Go button as active if main menu doesn't fully resemble
+     * locale, project, part combination currently being translated
+     */
+    updateGoButton: function () {
+      var toggle = this.getSelectedLocale() !== this.locale.code ||
+                   this.getSelectedProject() !== this.project.slug ||
+                   this.getSelectedPart() !== this.currentPart.title;
+      $('#go').toggleClass('active', toggle);
+    },
+
+
+    /*
      * Update project and (if needed) part menu
      */
     updateProjectMenu: function () {
@@ -1804,6 +2506,8 @@ var Pontoon = (function (my) {
 
       // Make sure part menu is always updated
       $('.project .menu [data-slug="' + slug + '"]').parent().click();
+
+      this.updateGoButton();
     },
 
 
@@ -1820,6 +2524,8 @@ var Pontoon = (function (my) {
       if (!part.length) {
         this.updatePartSelector(parts[0].title);
       }
+
+      this.updateGoButton();
     },
 
 
@@ -1843,23 +2549,6 @@ var Pontoon = (function (my) {
         $('#iframe-cover').hide(); // iframe fix
         $('.select').removeClass('opened');
         $('.menu li').removeClass('hover');
-      });
-
-      // Open/close sidebar
-      $('#switch').unbind("click.pontoon").bind("click.pontoon", function () {
-        if ($(this).is('.opened')) {
-          $('#sidebar').hide();
-          $('#source, #iframe-cover').css('margin-left', 0);
-          self.postMessage("MODE", "Advanced");
-        } else {
-          $('#sidebar').show();
-          $('#source, #iframe-cover').css('margin-left', $('#sidebar').width());
-          self.postMessage("MODE", "Basic");
-          self.setNotOnPage();
-        }
-        $('#source, #iframe-cover').width($(window).width() - $('#sidebar:visible').width());
-        self.postMessage("RESIZE");
-        $(this).toggleClass('opened');
       });
 
       // Locale menu handler
@@ -1971,6 +2660,7 @@ var Pontoon = (function (my) {
       $('.part .menu').on('click', 'li:not(".no-match"), .static-links .all-resources', function (e) {
         var title = $(this).find('span:first').html();
         self.updatePartSelector(title);
+        self.updateGoButton();
       });
 
       // Open selected project (part) and locale combination
@@ -1981,8 +2671,9 @@ var Pontoon = (function (my) {
           self.updateCurrentPart(self.getSelectedPart());
 
           // Reset optional state parameters and update state
-          self.setFilter();
           self.setSearch('');
+          self.updateFilterUI(self.getEmptyFilterObject());
+
           var state = self.getState('selected');
           state.entity = null;
           self.pushState(state);
@@ -2031,17 +2722,21 @@ var Pontoon = (function (my) {
      * Update authors list in filter menu
      */
     updateAuthors: function () {
-      $('#filter').find('.authors, .for-authors').toggle(this.authors.length > 0);
-      var authors = $('#filter .authors ul').empty();
+      var authors = $('#filter').find('.for-authors').toggle(this.authors.length > 0);
+      $('#filter .menu li.author').remove();
 
       $.each(this.authors, function() {
-        authors.append('<li data-type="' + this.email + '">' +
-          '<figure class="author">' +
-            '<img class="rounded" src="' + this.gravatar_url + '">' +
+        authors.after('<li class="author" data-type="' + this.email + '">' +
+          '<figure>' +
+            '<span class="sel">' +
+              '<span class="status fa"></span>' +
+              '<img class="rounded" src="' + this.gravatar_url + '">' +
+            '</span>' +
             '<figcaption>' +
               '<p class="name">' + this.display_name + '</p>' +
-              '<p class="email">' + this.email + '</p>' +
+              '<p class="role">' + this.role + '</p>' +
             '</figcaption>' +
+            '<span class="count">' + this.translation_count + '</span>' +
           '</figure>' +
         '</li>');
       });
@@ -2049,10 +2744,22 @@ var Pontoon = (function (my) {
 
 
     /*
+     * Reset Time range filter to default
+     */
+    resetTimeRange: function() {
+      $('#filter .time-range input').removeClass('error');
+
+      if ($('#filter .horizontal-separator .edit').is('.editing')) {
+        this.toggleRangeEditing();
+      }
+    },
+
+
+    /*
      * Update save buttons based on user permissions and settings
      */
     updateSaveButtons: function () {
-      $('[id^="save"]').toggleClass('suggest', !this.user.isTranslator || this.user.forceSuggestions);
+      $('[id^="save"]').toggleClass('suggest', !this.user.canTranslate() || this.user.forceSuggestions);
     },
 
 
@@ -2061,7 +2768,10 @@ var Pontoon = (function (my) {
      */
     updateProfileMenu: function () {
       $('#profile .admin-current-project a').attr('href', '/admin/projects/' + this.project.slug + '/');
-      $('#profile .upload').toggle(this.state.paths && this.user.isTranslator && this.part !== 'all-resources');
+      $('#profile .upload').toggle(this.state.paths && this.user.canTranslate() && this.part !== 'all-resources');
+      $('#profile .langpack')
+        .toggle(this.project.langpack_url !== '')
+        .find('a').attr('href', this.project.langpack_url.replace('{locale_code}', this.locale.code));
     },
 
 
@@ -2088,6 +2798,8 @@ var Pontoon = (function (my) {
         .attr('href', '/projects/' + this.project.slug);
       $('.static-links .current-localization').parent()
         .attr('href', '/' + this.locale.code + '/' + this.project.slug);
+
+      this.updateGoButton();
     },
 
 
@@ -2103,7 +2815,7 @@ var Pontoon = (function (my) {
      * Show/hide elements needed for in place localization
      */
     toggleInplaceElements: function() {
-      var inplaceElements = $('#source, #iframe-cover, #switch, #drag, #not-on-page').addClass('hidden').hide();
+      var inplaceElements = $('#source, #iframe-cover, #drag, #not-on-page').addClass('hidden').hide();
 
       if (this.project.win) {
         inplaceElements.removeClass('hidden').show();
@@ -2145,7 +2857,10 @@ var Pontoon = (function (my) {
       self.updateProjectInfo();
       self.updateProfileMenu();
       self.updateSaveButtons();
+      self.resetTimeRange();
       self.updateAuthors();
+      self.updateRangePicker();
+      self.updateFilterUI();
       self.renderEntityList();
       self.updateProgress();
 
@@ -2177,7 +2892,7 @@ var Pontoon = (function (my) {
           entity = this.state.entity;
 
       // No optional state parameters
-      if ((!filter || filter === 'all') && !search && !entity) {
+      if (!filter.status && !filter.extra && !filter.time && !filter.author && !search && !entity) {
         this.showDefaultView();
         return;
       }
@@ -2199,22 +2914,12 @@ var Pontoon = (function (my) {
       }
 
       if (this.requiresInplaceEditor()) {
-        this.toggleSidebar();
         this.setNotOnPage();
 
-        // Must follow toggleSidebar() or entities not visible
         if (!this.hasVisibleEntities()) {
           this.setNoMatch(true);
         }
       }
-    },
-
-
-    /*
-     * Toggle the sidebar
-     */
-    toggleSidebar: function() {
-      $('#switch').click();
     },
 
 
@@ -2240,6 +2945,7 @@ var Pontoon = (function (my) {
       if (Pontoon.project && !Pontoon.project.win) {
         return false;
       }
+
       var otherWindow = otherWindow || Pontoon.project.win,
           targetOrigin = targetOrigin || Pontoon.project.url,
           message = {
@@ -2313,21 +3019,19 @@ var Pontoon = (function (my) {
             if (sidebarWidth >= 700) {
               advanced = true;
               $('#sidebar').addClass('advanced').width(sidebarWidth);
-              $('#switch, #editor').addClass('opened');
+              $('#editor').addClass('opened');
 
             } else {
-              $('#sidebar').show().width(sidebarWidth);
-              $('#switch').addClass('opened');
+              $('#sidebar').width(sidebarWidth);
               $('#editor').css('left', sidebarWidth);
             }
             Pontoon.setNotOnPage();
 
-          } else if ($('#sidebar:visible').length) {
-            $('#sidebar').removeClass('advanced').css('width', '350px').hide();
-            $('#switch').removeClass('opened');
+          } else {
+            $('#sidebar').removeClass('advanced').css('width', '350px');
           }
 
-          $('#source, #iframe-cover').css('margin-left', $('#sidebar:visible').width() || 0);
+          $('#source, #iframe-cover').css('margin-left', $('#sidebar').width() || 0);
           $('#source').show();
 
           Pontoon.ready = true;
@@ -2373,10 +3077,6 @@ var Pontoon = (function (my) {
           Pontoon.syncLocalStorageOnServer();
           break;
 
-        case "SWITCH":
-          Pontoon.toggleSidebar();
-          break;
-
         case "HOVER":
           Pontoon.entities[message.value].ui.addClass('hovered');
           break;
@@ -2386,29 +3086,14 @@ var Pontoon = (function (my) {
           break;
 
         case "ACTIVE":
-          if ($('#switch').is('.opened')) {
-            var entity = Pontoon.entities[message.value.id];
-            Pontoon.openEditor(entity, message.value.inplace);
-          }
+          var entity = Pontoon.entities[message.value];
+          Pontoon.openEditor(entity);
           break;
 
         case "INACTIVE":
           if (!Pontoon.app.advanced && $("#editor").is('.opened')) {
             Pontoon.goBackToEntityList();
           }
-          break;
-
-        case "UPDATE":
-          var entity = Pontoon.entities[message.value.id],
-              translation = message.value.content;
-          Pontoon.updateOnServer(entity, translation, true, true);
-          $('#translation').val(translation);
-          Pontoon.updateCachedTranslation();
-          break;
-
-        case "DELETE":
-          var entity = Pontoon.entities[message.value];
-          Pontoon.updateEntityUI(entity);
           break;
 
         }
@@ -2527,13 +3212,6 @@ var Pontoon = (function (my) {
     createObject: function (advanced, projectWindow) {
       var self = this;
 
-      function isTranslator(translatedLocales) {
-        if (translatedLocales) {
-          return translatedLocales.indexOf(self.locale.code) > -1;
-        }
-        return false;
-      }
-
       this.app = {
         win: window,
         advanced: advanced,
@@ -2547,12 +3225,30 @@ var Pontoon = (function (my) {
         slug: self.getProjectData('slug'),
         info: self.getProjectData('info'),
         width: self.getProjectWidth(),
-        links: self.getProjectData('links') === 'True' ? true : false
+        links: self.getProjectData('links') === 'True' ? true : false,
+        langpack_url: self.getProjectData('langpack_url')
       };
 
       this.part = this.getSelectedPart();
       this.locale = self.getLocaleData();
-      this.user.isTranslator = isTranslator($('#server').data('user-translated-locales'));
+
+      /* Copy of User.can_translate(), used on client to improve performance */
+      this.user.canTranslate = function() {
+        var managedLocales = $('#server').data('user-managed-locales') || [],
+            translatedLocales = $('#server').data('user-translated-locales') || [],
+            translatedProjects = $('#server').data('user-translated-projects') || {},
+            localeProject = self.locale.code + '-' + self.project.slug;
+
+        if ($.inArray(self.locale.code, managedLocales) !== -1) {
+          return true;
+        }
+
+        if (translatedProjects.hasOwnProperty(localeProject)) {
+           return translatedProjects[localeProject];
+        }
+
+        return $.inArray(self.locale.code, translatedLocales) !== -1;
+      };
     },
 
 
@@ -2590,7 +3286,7 @@ var Pontoon = (function (my) {
      */
     withoutInPlace: function() {
       var self = this;
-      $('#sidebar').addClass('advanced').css('width', '100%').show();
+      $('#sidebar').addClass('advanced').css('width', '100%');
       $('#entitylist').css('left', '');
 
       self.createObject(true);
@@ -2661,7 +3357,10 @@ var Pontoon = (function (my) {
             'locale': state.locale,
             'paths': self.getPartPaths(self.currentPart),
             'search': self.getSearch(),
-            'filter': self.getFilter(),
+            'status': self.getFilter('status').join(','),
+            'extra': self.getFilter('extra').join(','),
+            'time': self.getFilter('time'),
+            'author': self.getFilter('author').join(','),
             'inplaceEditor': self.requiresInplaceEditor()
           },
           deferred = $.Deferred();
@@ -2696,6 +3395,7 @@ var Pontoon = (function (my) {
 
       self.stats = entitiesData.stats;
       self.authors = entitiesData.authors;
+      self.countsPerMinute = entitiesData.counts_per_minute;
       self.entities = entitiesData.entities;
       self.hasNext = hasNext;
 
@@ -2709,6 +3409,8 @@ var Pontoon = (function (my) {
           self.setMainLoading(false);
           self.updateProgress();
           self.updateAuthors();
+          self.updateRangePicker();
+          self.updateFilterUI();
           self.createObject(true);
           return;
         }
@@ -2832,7 +3534,7 @@ var Pontoon = (function (my) {
     },
 
 
-    getEditorEntityId: function() {
+    getEditorEntityPk: function() {
       var entity = this.getEditorEntity();
 
       if (entity) {
@@ -2844,9 +3546,23 @@ var Pontoon = (function (my) {
     isEditorEntityAvailable: function() {
       var availableEntityIds = this.getEntitiesIds();
 
-      return availableEntityIds.indexOf(this.getEditorEntityId()) > -1;
+      return availableEntityIds.indexOf(this.getEditorEntityPk()) > -1;
     },
 
+    highlightQuery: function(item) {
+      var searchQuery = this.getSearch(),
+          item = item || $('#entitylist .source-string, #entitylist .translation-string');
+
+      item.unmark();
+      if (searchQuery) {
+        item.mark(searchQuery, {
+          acrossElements: true,
+          caseSensitive: false,
+          className: 'search',
+          separateWordSearch: false
+        });
+      }
+    },
 
     loadNextEntities: function(type) {
       var self = this,
@@ -2877,9 +3593,11 @@ var Pontoon = (function (my) {
           self.setNoMatch(true);
         } else {
           self.setNoMatch(false);
+          self.highlightQuery();
+
           if (self.app.advanced && type !== 'scroll') {
             if (self.isEditorEntityAvailable()) {
-              var ui = $('#entitylist .entity[data-entry-pk=' + self.getEditorEntityId() + ']');
+              var ui = $('#entitylist .entity[data-entry-pk=' + self.getEditorEntityPk() + ']');
               ui.addClass('hovered');
               self.getEditorEntity().ui = ui; // DOM node might have been replaced
             } else {
@@ -2984,8 +3702,20 @@ var Pontoon = (function (my) {
         url = '/';
       }
 
-      if (state.filter && state.filter !== 'all') {
-        queryParams.filter = state.filter;
+      if (state.filter.status.length > 0) {
+        queryParams.status = state.filter.status.join(',');
+      }
+
+      if (state.filter.extra.length > 0) {
+        queryParams.extra = state.filter.extra.join(',');
+      }
+
+      if (state.filter.time) {
+        queryParams.time = state.filter.time;
+      }
+
+      if (state.filter.author.length > 0) {
+        queryParams.author = state.filter.author.join(',');
       }
 
       if (state.search && state.search !== '') {
@@ -3035,7 +3765,7 @@ var Pontoon = (function (my) {
         paths: type === 'selected' ? this.getSelectedPart() : this.part,
         filter: this.getFilter(),
         search: this.getSearch(),
-        entity: this.getEditorEntityId()
+        entity: this.getEditorEntityPk()
       };
     },
 
@@ -3045,13 +3775,19 @@ var Pontoon = (function (my) {
      */
     updateInitialState: function() {
       var state = this.getState('selected');
-      state.filter = this.getQueryParam('filter');
+      state.filter = {
+        status: this.getQueryParam('status') ? this.getQueryParam('status').split(',') : [],
+        extra: this.getQueryParam('extra') ? this.getQueryParam('extra').split(',') : [],
+        time: this.getQueryParam('time'),
+        author: this.getQueryParam('author') ? this.getQueryParam('author').split(',') : []
+      };
       state.search = this.getQueryParam('search');
       state.entity = this.getQueryParam('string');
 
       // Update search and filter
       this.setSearch(state.search);
-      this.setFilter(state.filter);
+      this.validateTimeRangeURL(state.filter);
+      this.updateFilterUI(state.filter);
 
       // Fallback to first available part if no matches found (mistyped URL)
       var paths = requestedPaths = this.getSelectedPart();
@@ -3085,17 +3821,21 @@ window.onpopstate = function(e) {
     Pontoon.authors = $('#server').data('authors');
     Pontoon.updateAuthors();
 
+    Pontoon.countsPerMinute = $('#server').data('counts-per-minute');
+    Pontoon.updateRangePicker();
+
     // Update search and filter
     Pontoon.setSearch(Pontoon.state.search);
-    Pontoon.setFilter(Pontoon.state.filter);
+    Pontoon.validateTimeRangeURL(Pontoon.state.filter);
+    Pontoon.updateFilterUI(Pontoon.state.filter);
 
     Pontoon.initializePart(true);
   }
 };
 
 Pontoon.user = {
-  email: $('#server').data('email') || '',
-  name: $('#server').data('name') || '',
+  id: $('#server').data('id') || '',
+  display_name: $('#server').data('display-name'),
   forceSuggestions: $('#server').data('force-suggestions') === 'True' ? true : false,
   manager: $('#server').data('manager'),
   localesOrder: $('#server').data('locales-order') || {},
@@ -3109,5 +3849,9 @@ Pontoon.attachBatchEditorHandlers();
 Pontoon.authors = $('#server').data('authors');
 Pontoon.updateAuthors();
 
+Pontoon.countsPerMinute = $('#server').data('counts-per-minute');
+Pontoon.updateRangePicker();
+
 Pontoon.updateInitialState();
+Pontoon.updateFilterUI();
 Pontoon.initializePart();

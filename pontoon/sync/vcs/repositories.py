@@ -16,9 +16,10 @@ class PullFromRepositoryException(Exception):
 
 class PullFromRepository(object):
 
-    def __init__(self, source, target):
+    def __init__(self, source, target, branch):
         self.source = source
         self.target = target
+        self.branch = branch
 
     def pull(self, source=None, target=None):
         raise NotImplementedError
@@ -26,33 +27,45 @@ class PullFromRepository(object):
 
 class PullFromGit(PullFromRepository):
 
-    def pull(self, source=None, target=None):
+    def pull(self, source=None, target=None, branch=None):
         log.debug("Git: Update repository.")
 
         source = source or self.source
         target = target or self.target
+        branch = branch or self.branch
 
         command = ["git", "fetch", "--all"]
         execute(command, target)
 
         # Undo local changes
-        command = ["git", "reset", "--hard", "origin/master"]
+        remote = "origin"
+        if branch:
+            remote += "/" + branch
+
+        command = ["git", "reset", "--hard", remote]
         code, output, error = execute(command, target)
 
-        if code == 0:
-            log.debug("Git: Repository at " + source + " updated.")
-
-        else:
-            log.debug("Git: " + unicode(error))
+        if code != 0:
+            log.info("Git: " + unicode(error))
             log.debug("Git: Clone instead.")
             command = ["git", "clone", source, target]
             code, output, error = execute(command)
 
-            if code == 0:
-                log.debug("Git: Repository at " + source + " cloned.")
-
-            else:
+            if code != 0:
                 raise PullFromRepositoryException(unicode(error))
+
+            log.debug("Git: Repository at " + source + " cloned.")
+        else:
+            log.debug("Git: Repository at " + source + " updated.")
+
+        if branch:
+            command = ["git", "checkout", branch]
+            code, output, error = execute(command, target)
+
+            if code != 0:
+                raise PullFromRepositoryException(unicode(error))
+
+            log.debug("Git: Branch " + branch + " checked out.")
 
 
 class PullFromHg(PullFromRepository):
@@ -63,27 +76,18 @@ class PullFromHg(PullFromRepository):
         source = source or self.source
         target = target or self.target
 
-        # Undo local changes
-        command = ["hg", "revert", "--all", "--no-backup"]
-        execute(command, target)
+        # Undo local changes: Mercurial doesn't offer anything more elegant
+        command = ["rm", "-rf", target]
+        code, output, error = execute(command)
 
-        command = ["hg", "pull", "-u"]
-        code, output, error = execute(command, target)
+        command = ["hg", "clone", source, target]
+        code, output, error = execute(command)
 
         if code == 0:
-            log.debug("Mercurial: Repository at " + source + " updated.")
+            log.debug("Mercurial: Repository at " + source + " cloned.")
 
         else:
-            log.debug("Mercurial: " + unicode(error))
-            log.debug("Mercurial: Clone instead.")
-            command = ["hg", "clone", source, target]
-            code, output, error = execute(command)
-
-            if code == 0:
-                log.debug("Mercurial: Repository at " + source + " cloned.")
-
-            else:
-                raise PullFromRepositoryException(unicode(error))
+            raise PullFromRepositoryException(unicode(error))
 
 
 class PullFromSvn(PullFromRepository):
@@ -117,11 +121,12 @@ class CommitToRepositoryException(Exception):
 
 class CommitToRepository(object):
 
-    def __init__(self, path, message, user, url):
+    def __init__(self, path, message, user, branch, url):
         self.path = path
         self.message = message
         self.user = user
         self.url = url
+        self.branch = branch
 
     def commit(self, path=None, message=None, user=None):
         raise NotImplementedError
@@ -132,12 +137,13 @@ class CommitToRepository(object):
 
 class CommitToGit(CommitToRepository):
 
-    def commit(self, path=None, message=None, user=None):
+    def commit(self, path=None, message=None, user=None, branch=None):
         log.debug("Git: Commit to repository.")
 
         path = path or self.path
         message = message or self.message
         user = user or self.user
+        branch = branch or self.branch
         author = user.display_name_and_email
 
         # Embed git identity info into commands
@@ -154,7 +160,11 @@ class CommitToGit(CommitToRepository):
             raise CommitToRepositoryException(unicode(error))
 
         # Push
-        push = ["git", "push", self.url, 'master']
+        push_target = 'HEAD'
+        if branch:
+            push_target = branch
+
+        push = ["git", "push", self.url, push_target]
         code, output, error = execute(push, path)
         if code != 0:
             raise CommitToRepositoryException(unicode(error))
@@ -235,21 +245,15 @@ def execute(command, cwd=None, env=None):
         return -1, "", error
 
 
-def update_from_vcs(repo_type, url, path):
-    try:
-        obj = globals()['PullFrom%s' % repo_type.capitalize()](url, path)
-        obj.pull()
-
-    except PullFromRepositoryException as e:
-        error = '%s Pull Error for %s: %s' % (repo_type.upper(), url, e)
-        log.debug(error)
-        raise Exception(error)
+def update_from_vcs(repo_type, url, path, branch):
+    obj = globals()['PullFrom%s' % repo_type.capitalize()](url, path, branch)
+    obj.pull()
 
 
-def commit_to_vcs(repo_type, path, message, user, url):
+def commit_to_vcs(repo_type, path, message, user, branch, url):
     try:
         obj = globals()['CommitTo%s' % repo_type.capitalize()](
-            path, message, user, url)
+            path, message, user, branch, url)
         return obj.commit()
 
     except CommitToRepositoryException as e:
@@ -330,7 +334,7 @@ class GitRepository(VCSRepository):
     @property
     def revision(self):
         code, output, error = self.execute(
-            ['git', 'rev-parse', 'master'],
+            ['git', 'rev-parse', 'HEAD'],
         )
         return output.strip() if code == 0 else None
 
@@ -357,10 +361,14 @@ class HgRepository(VCSRepository):
         )
         return output.strip() if code == 0 else None
 
+    def _strip(self, rev):
+        "Ignore trailing + in revision number. It marks local changes."
+        return rev.rstrip('+')
+
     def get_changed_files(self, path, from_revision, statuses=None):
         statuses = statuses or ('A', 'M')
         code, output, error = self.execute(
-            ['hg', 'status', '-a', '-m', '-r', '--rev={}'.format(from_revision), '--rev=tip'],
+            ['hg', 'status', '-a', '-m', '-r', '--rev={}'.format(self._strip(from_revision)), '--rev=tip'],
             cwd=path
         )
         if code == 0:
@@ -369,7 +377,7 @@ class HgRepository(VCSRepository):
         return []
 
     def get_removed_files(self, path, from_revision):
-        return self.get_changed_files(path, from_revision, ('R',))
+        return self.get_changed_files(path, self._strip(from_revision), ('R',))
 
 
 # TODO: Tie these to the same constants that the Repository model uses.

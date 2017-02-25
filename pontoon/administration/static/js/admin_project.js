@@ -1,7 +1,7 @@
 $(function() {
 
   // Before submitting the form
-  $('form').submit(function (e) {
+  $('#admin-form').submit(function (e) {
     // Update locales
     var arr = [];
     $("#selected").parent().siblings('ul').find('li:not(".no-match")').each(function() {
@@ -14,7 +14,7 @@ $(function() {
     if (slug.length > 0) {
       slug += '/';
     }
-    $('form').attr('action', $('form').attr('action').split('/projects/')[0] + '/projects/' + slug);
+    $('#admin-form').attr('action', $('#admin-form').attr('action').split('/projects/')[0] + '/projects/' + slug);
   });
 
   // Submit form with Enter
@@ -24,11 +24,43 @@ $(function() {
       if (key === 13) { // Enter
         // A short delay to allow digest of autocomplete before submit
         setTimeout(function() {
-          $('form').submit();
+          $('#admin-form').submit();
         }, 1);
         return false;
       }
     }
+  });
+
+  // Submit form with button
+  $('.save').click(function(e) {
+    e.preventDefault();
+    $('#admin-form').submit();
+  });
+
+  // Manually Sync project
+  $('.sync').click(function(e) {
+    e.preventDefault();
+
+    var button = $(this),
+        title = button.html();
+
+    if (button.is('.in-progress')) {
+      return;
+    }
+
+    button.addClass('in-progress').html('Syncing...');
+
+    $.ajax({
+      url: '/projects/' + $('#id_slug').val() + '/sync/'
+    }).success(function() {
+      button.html('Sync started');
+    }).error(function() {
+      button.html('Whoops!');
+    }).complete(function() {
+      setTimeout(function() {
+        button.removeClass('in-progress').html(title);
+      }, 2000);
+    });
   });
 
   // Suggest slugified name for new projects
@@ -86,15 +118,34 @@ $(function() {
     $('#id_subpage_set-TOTAL_FORMS').val(count);
   });
 
+  function toggleBranchInput(repoIndex) {
+    $('#id_repositories-' + repoIndex + '-type').change(function(e) {
+      if (e.target.value === 'git') {
+        $('#id_repositories-' + repoIndex + '-branch').show();
+        $('[for="id_repositories-' + repoIndex + '-branch"]').show();
+      } else {
+        $('#id_repositories-' + repoIndex + '-branch').hide();
+        $('[for="id_repositories-' + repoIndex + '-branch"]').hide();
+      }
+    });
+  }
+  // Initial branch toggle. Need to loop over all repos on init.
+  var $totalForms = $('#id_repositories-TOTAL_FORMS');
+  var count = parseInt($totalForms.val(), 10);
+  while (count) {
+    toggleBranchInput(--count);
+  }
+
   // Add repo
   $('.add-repo').click(function(e) {
     e.preventDefault();
-    var $totalForms = $('#id_repositories-TOTAL_FORMS');
     var count = parseInt($totalForms.val(), 10);
 
     var $emptyForm = $('.repository-empty');
     var form = $emptyForm.html().replace(/__prefix__/g, count);
     $('.repository:last').after('<div class="repository clearfix">' + form + '</div>');
+
+    toggleBranchInput(count);
 
     $totalForms.val(count + 1);
   });

@@ -19,7 +19,7 @@ all the prerequisites using the following command:
 
    .. code-block:: bash
 
-      sudo apt install git python-pip nodejs-legacy npm postgresql postgresql-server-dev-9.5 libxml2-dev libxslt1-dev python-dev libmemcached-dev
+      sudo apt install git python-pip nodejs-legacy npm postgresql postgresql-server-dev-9.5 postgresql-contrib-9.5 libxml2-dev libxslt1-dev python-dev libmemcached-dev virtualenv
 
 .. _Git: https://git-scm.com/
 .. _Python 2.7: https://www.python.org/
@@ -57,7 +57,17 @@ Installation
 
       pip install --require-hashes -r requirements-dev.txt
 
-4. Create a ``.env`` file at the root of the repository to configure the
+4. Create your database, using the following set of commands:
+
+   .. code-block:: bash
+
+      sudo -u postgres psql
+      CREATE USER pontoon WITH PASSWORD 'asdf' SUPERUSER;
+      CREATE DATABASE pontoon;
+      GRANT ALL PRIVILEGES ON DATABASE pontoon to pontoon;
+      \q
+
+5. Create a ``.env`` file at the root of the repository to configure the
    settings for your development instance. It should look something like this:
 
    .. code-block:: ini
@@ -68,6 +78,11 @@ Installation
       DATABASE_URL=postgres://pontoon:asdf@localhost/pontoon
       SESSION_COOKIE_SECURE=False
       SITE_URL=http://localhost:8000
+      FXA_CLIENT_ID=2651b9211a44b7b2
+      FXA_SECRET_KEY=a3cafccbafe39db54f2723f8a6f804c337e362950f197b5b33050d784129d570
+      FXA_OAUTH_ENDPOINT=https://oauth-stable.dev.lcip.org/v1
+      FXA_PROFILE_ENDPOINT=https://stable.dev.lcip.org/profile/v1
+
 
    Make sure to make the following modifications to the template above:
 
@@ -81,31 +96,42 @@ Installation
 
    - ``SITE_URL`` should be set to the URL you will use to connect to your
      local development site. Some people prefer to use
-     ``http://127.0.0.1:8000`` instead of ``localhost``.
+     ``http://127.0.0.1:8000`` instead of ``localhost``. However, should you
+     decide to change the ``SITE_URL``, you also need to request_
+     the new ``FXA_CLIENT_ID`` and ``FXA_SECRET_KEY``, and our demo/intro site
+     ``http://localhost:8000/intro`` will require change of base url.
 
-5. Initialize your database by running the migrations:
+6. Initialize your database by running the migrations:
 
    .. code-block:: bash
 
       python manage.py migrate
 
-6. Create a new superuser account:
+7. Create a new superuser account:
 
    .. code-block:: bash
 
       python manage.py createsuperuser
 
    Make sure that the email address you use for the superuser account matches
-   the email that you will log in with via Persona.
+   the email that you will log in with via Firefox Accounts.
 
-7. Pull the latest strings from version control for the Pontoon Intro project
+8. Pull the latest strings from version control for the Pontoon Intro project
    (which is automatically created for you during the database migrations):
 
    .. code-block:: bash
 
       python manage.py sync_projects --no-commit pontoon-intro
 
-8. Install the required Node libraries using ``npm``:
+9. After you've provided credentials to Firefox Accounts, you have to update them in database,
+   because it's required by django-allauth. You will have to call this command after every change in your
+   FXA settings (e.g. client key):
+
+   .. code-block:: bash
+
+      python manage.py updatefxaprovider
+
+10. Install the required Node libraries using ``npm``:
 
    .. code-block:: bash
 
@@ -120,9 +146,9 @@ running:
 
 The site should be available at http://localhost:8000.
 
-.. _pip: https://pip.pypa.io/en/stable/
 .. _fork: http://help.github.com/fork-a-repo/
 .. _issue: https://bugs.python.org/issue18378
+.. _request: https://developer.mozilla.org/docs/Mozilla/Tech/Firefox_Accounts/Introduction
 
 Extra settings
 --------------
@@ -134,6 +160,8 @@ The following extra settings can be added to your ``.env`` file.
    Set your `Google Analytics key`_ to use Google Analytics.
 ``MOZILLIANS_API_KEY``
    Set your `Mozillians API key`_ to grant permission to Mozilla localizers.
+``DJANGO_LOGIN``
+   Set to True if you want to use the default Django login instead of Firefox Accounts. This will run allow you to log in via accounts created using `manage.py shell`.
 
 .. _Microsoft Translator API key: http://msdn.microsoft.com/en-us/library/hh454950
 .. _Google Analytics key: https://www.google.com/analytics/

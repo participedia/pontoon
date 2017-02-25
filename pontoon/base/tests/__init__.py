@@ -4,10 +4,12 @@ import tempfile
 
 from django.contrib.auth.models import User
 from django.template.defaultfilters import slugify
-from django.test import TestCase as BaseTestCase
+from django.test import (
+    TestCase as BaseTestCase,
+    Client as BaseClient
+)
 
 import factory
-from django_browserid.tests import mock_browserid
 from django_nose.tools import assert_equal
 from factory import LazyAttribute, Sequence, SubFactory, SelfAttribute
 from factory.django import DjangoModelFactory
@@ -28,20 +30,17 @@ from pontoon.base.models import (
 )
 
 
+class PontoonClient(BaseClient):
+    """Useful helper methods that can be used in tests."""
+
+    def ajax_post(self, url, params):
+        """Send data to the ajax-type view."""
+        return self.post(url, params, HTTP_X_REQUESTED_WITH='XMLHttpRequest')
+
+
+
 class TestCase(BaseTestCase):
-    def client_login(self, user=None):
-        """
-        Authenticate the test client as the given user. If no user is
-        given, a test user is created and returned.
-        """
-        if user is None:
-            user = UserFactory.create()
-
-        with mock_browserid(user.email):
-            self.client.login(assertion='asdf', audience='asdf')
-
-        return user
-
+    client_class = PontoonClient
     def patch(self, *args, **kwargs):
         """
         Wrapper around mock.patch that automatically cleans up the patch
@@ -96,6 +95,7 @@ class ProjectFactory(DjangoModelFactory):
                 self.repositories.add(repository)
         else:  # Default to a single valid repo.
             self.repositories.add(RepositoryFactory.build(), bulk=False)
+
 
 class ProjectLocaleFactory(DjangoModelFactory):
     class Meta:
@@ -202,14 +202,15 @@ class SubpageFactory(DjangoModelFactory):
                 self.resources.add(resource)
 
 
-def assert_redirects(response, expected_url, status_code=302, host=None):
+def assert_redirects(response, expected_url, status_code=302, host=None, secure=False):
     """
     Assert that the given response redirects to the expected URL.
 
     The main difference between this and TestCase.assertRedirects is
     that this version doesn't follow the redirect.
     """
-    host = host or 'http://testserver'
+    if host is None:
+        host = '{}://{}'.format('https' if secure else 'http', host or 'testserver')
     assert_equal(response.status_code, status_code)
     assert_equal(response['Location'], host + expected_url)
 
@@ -221,6 +222,7 @@ def assert_attributes_equal(original, **expected_attrs):
     """
     if not expected_attrs:
         raise ValueError('Expected some attributes to check.')
+
     for key, value in expected_attrs.items():
         original_value = getattr(original, key)
         assert_equal(
@@ -229,6 +231,7 @@ def assert_attributes_equal(original, **expected_attrs):
             ('Attribute `{key}` does not match: {original_value} != {value}'
              .format(key=key, original_value=original_value, value=value)),
         )
+
 
 class NOT(object):
     """
