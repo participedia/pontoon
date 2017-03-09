@@ -30,7 +30,8 @@ class UserAdmin(AuthUserAdmin):
 
 class LocaleAdmin(admin.ModelAdmin):
     search_fields = ['name', 'code']
-    list_display = ('pk', 'name', 'code', 'nplurals', 'plural_rule', 'cldr_plurals')
+    list_display = ('pk', 'name', 'code', 'script', 'direction', 'population',
+                    'cldr_plurals', 'nplurals', 'plural_rule')
     exclude = ('translators_group', 'managers_group')
     readonly_fields = AGGREGATED_STATS_FIELDS + ('latest_translation',)
 
@@ -46,7 +47,7 @@ class RepositoryInline(admin.TabularInline):
     model = models.Repository
     extra = 0
     verbose_name_plural = 'Repositories'
-    fields = ('type', 'url', 'branch', 'permalink_prefix', 'last_synced_revisions', 'source_repo',)
+    fields = ('type', 'url', 'branch', 'website', 'permalink_prefix', 'last_synced_revisions', 'source_repo',)
 
 
 class SubpageInline(admin.TabularInline):
@@ -59,18 +60,21 @@ class SubpageInline(admin.TabularInline):
 
 class ProjectAdmin(admin.ModelAdmin):
     search_fields = ['name', 'slug']
-    list_display = ('name', 'slug', 'pk', 'disabled')
+    list_display = ('name', 'slug', 'deadline', 'priority', 'pk', 'disabled')
 
     fieldsets = (
         (None, {
-            'fields': ('name', 'slug', 'info_brief', 'langpack_url', 'disabled',),
+            'fields': (
+                'name', 'slug', 'info', 'deadline', 'priority',
+                'l10n_contact', 'project_contact', 'preview_url', 'project_url',
+                'langpack_url', 'can_be_requested', 'disabled'),
         }),
         ('WEBSITE', {
             'fields': ('url', 'width', 'links'),
         }),
     )
     readonly_fields = AGGREGATED_STATS_FIELDS + ('latest_translation',)
-    inlines = (ProjectLocaleInline, RepositoryInline, SubpageInline)
+    inlines = (SubpageInline, ProjectLocaleInline, RepositoryInline)
 
 
 class ResourceAdmin(admin.ModelAdmin):

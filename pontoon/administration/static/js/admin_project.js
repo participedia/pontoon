@@ -19,7 +19,7 @@ $(function() {
 
   // Submit form with Enter
   $('html').unbind("keydown.pontoon").bind("keydown.pontoon", function (e) {
-    if ($('input[type=text]:not("input[type=search]"):focus').length > 0) {
+    if ($('input[type=text]:focus').length > 0 || $('input[type=url]:focus').length > 0) {
       var key = e.keyCode || e.which;
       if (key === 13) { // Enter
         // A short delay to allow digest of autocomplete before submit
@@ -51,7 +51,7 @@ $(function() {
     button.addClass('in-progress').html('Syncing...');
 
     $.ajax({
-      url: '/projects/' + $('#id_slug').val() + '/sync/'
+      url: '/admin/projects/' + $('#id_slug').val() + '/sync/'
     }).success(function() {
       button.html('Sync started');
     }).error(function() {
@@ -84,21 +84,32 @@ $(function() {
     });
   });
 
-  // Select repository type
-  $('body').click(function () {
-    $('.repository')
-      .find('.menu').hide().end()
-      .find('.select').removeClass('opened');
+  // Copy locales from another project
+  $('#copy-locales option').on('click', function(e) {
+    var projectLocales = [];
+
+    try {
+      projectLocales = JSON.parse($(this).val()).reverse();
+    } catch(error) {
+      // No project selected
+      return;
+    }
+
+    $('.remove-all').click();
+    $(projectLocales).each(function(i, id) {
+      $('.locale.select:first').find('[data-id=' + id + ']').click();
+    });
   });
-  $('.repository .type li').click(function () {
-    var selected = $(this).html(),
-        selected_lower = selected.toLowerCase();
-    $(this).parents('.select').find('.title').html(selected);
-    $('#id_repository_type').val(selected_lower);
-    $('.details-wrapper').attr('data-repository-type', selected_lower);
+
+  // Suggest public repository website URL
+  $('body').on('blur', '.repo input', function() {
+    var val = $(this).val()
+      .replace(/\.git$/, '')
+      .replace('git@github.com:', 'https://github.com/')
+      .replace('ssh://', 'https://');
+
+    $(this).parents('.repository').find('.website-wrapper input').val(val);
   });
-  // Show human-readable value
-  $('.repository .type li[data-type=' + $('#id_repository_type').val() + ']').click();
 
   // Delete subpage
   $('body').on('click.pontoon', '.delete-subpage', function (e) {
@@ -118,25 +129,21 @@ $(function() {
     $('#id_subpage_set-TOTAL_FORMS').val(count);
   });
 
-  function toggleBranchInput(repoIndex) {
-    $('#id_repositories-' + repoIndex + '-type').change(function(e) {
-      if (e.target.value === 'git') {
-        $('#id_repositories-' + repoIndex + '-branch').show();
-        $('[for="id_repositories-' + repoIndex + '-branch"]').show();
-      } else {
-        $('#id_repositories-' + repoIndex + '-branch').hide();
-        $('[for="id_repositories-' + repoIndex + '-branch"]').hide();
-      }
-    });
+  // Toggle branch input
+  function toggleBranchInput(element, value) {
+    $(element).parents('.repository').toggleClass('git', $(element).val() === 'git');
   }
-  // Initial branch toggle. Need to loop over all repos on init.
-  var $totalForms = $('#id_repositories-TOTAL_FORMS');
-  var count = parseInt($totalForms.val(), 10);
-  while (count) {
-    toggleBranchInput(--count);
-  }
+  // On select change
+  $('body').on('change', '.repository .type-wrapper select', function(e) {
+    toggleBranchInput(this);
+  });
+  // On page load
+  $('.repository .type-wrapper select').each(function() {
+    toggleBranchInput(this);
+  });
 
   // Add repo
+  var $totalForms = $('#id_repositories-TOTAL_FORMS');
   $('.add-repo').click(function(e) {
     e.preventDefault();
     var count = parseInt($totalForms.val(), 10);
@@ -145,12 +152,8 @@ $(function() {
     var form = $emptyForm.html().replace(/__prefix__/g, count);
     $('.repository:last').after('<div class="repository clearfix">' + form + '</div>');
 
-    toggleBranchInput(count);
+    toggleBranchInput($('.repository:last').find('.type-wrapper select'));
 
     $totalForms.val(count + 1);
   });
-
-  // Auto-Update project if chosen locales changed
-  $('.repository.autoupdate .update:visible').click();
-
 });

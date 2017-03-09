@@ -9,9 +9,10 @@ def create_translators(apps, schema_editor):
     Bug 952488 - We're assigning translation permissions to active contributors.
     """
     User = apps.get_model('auth', 'User')
+    users = getattr(User, 'translators', getattr(User, 'objects', None))
 
     contributors_locale = (
-        User.objects
+        users
             .filter(translation__approved=True, user_permissions__codename="can_localize")
             .annotate(translated_locales=models.Count('translation__locale', distinct=True))
             .filter(translated_locales=1)
